@@ -13,6 +13,7 @@ on:
       - main
     paths:
       - .github/workflows/build.yml
+      - overlay-features/native-linux-tray/**
   schedule:
     - cron: '17,47 * * * *'
 
@@ -67,6 +68,9 @@ jobs:
       CODEX_LINUX_FEATURES_CONFIG: ${{ github.workspace }}/codex-desktop-linux/linux-features/features.codex-linux.json
       CODEX_PATCH_REPORT_JSON: ${{ github.workspace }}/codex-desktop-linux/patch-report.json
     steps:
+      - name: Checkout packaging overlay
+        uses: actions/checkout@v4
+
       - name: Install appimagetool
         run: |
           sudo wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage -O /usr/local/bin/appimagetool
@@ -81,13 +85,17 @@ jobs:
           git checkout --detach "$UPSTREAM_SHA"
           test "$(git rev-parse HEAD)" = "$UPSTREAM_SHA"
 
-      - name: Enable upstream Linux Dock icon support
+      - name: Restore native Linux tray retention
         run: |
           set -euo pipefail
 
+          node --check overlay-features/native-linux-tray/patch.js
+          rm -rf codex-desktop-linux/linux-features/native-linux-tray
+          cp -a overlay-features/native-linux-tray codex-desktop-linux/linux-features/native-linux-tray
+
           cat > "$CODEX_LINUX_FEATURES_CONFIG" <<'JSON'
           {
-            "enabled": ["ui-tweaks"],
+            "enabled": ["ui-tweaks", "native-linux-tray"],
             "settings": {
               "ui-tweaks": {
                 "tweaks": {
@@ -112,8 +120,10 @@ jobs:
 
           node scripts/ci/validate-patch-report.js "$CODEX_PATCH_REPORT_JSON" \
             --require-enabled-feature ui-tweaks \
+            --require-enabled-feature native-linux-tray \
             --require-applied feature:ui-tweaks:appearance-dock-icon-main-process \
-            --require-applied feature:ui-tweaks:appearance-dock-icon-settings-row
+            --require-applied feature:ui-tweaks:appearance-dock-icon-settings-row \
+            --require-applied feature:native-linux-tray:retain-linux-tray
 
           test -f codex-app/resources/dock-icon/icon-chatgpt.png
           test -x codex-app/resources/dock-icon/sync-desktop-icon.sh
@@ -123,8 +133,8 @@ jobs:
           MAIN_BUNDLE="$(find "$RUNNER_TEMP/codex-asar-check/.vite/build" -maxdepth 1 -type f -name 'main*.js' -print -quit)"
           test -n "$MAIN_BUNDLE"
           grep -Fq 'codexLinuxApplyDockIcon' "$MAIN_BUNDLE"
+          grep -Fq 'codexLinuxNativeTrayRetention' "$MAIN_BUNDLE"
           grep -Fq 'BrowserWindow.getAllWindows()' "$MAIN_BUNDLE"
-          grep -Fq '.setIcon(s)' "$MAIN_BUNDLE"
           node --check "$MAIN_BUNDLE"
 
           make appimage
@@ -161,13 +171,17 @@ jobs:
           test "$(git rev-parse HEAD)" = "$UPSTREAM_SHA"
           rustup default stable
 
+          rm -rf linux-features/native-linux-tray
+          cp -a /overlay-native-linux-tray linux-features/native-linux-tray
+          node --check linux-features/native-linux-tray/patch.js
+
           CODEX_LINUX_FEATURES_CONFIG="$PWD/linux-features/features.codex-linux.json"
           CODEX_PATCH_REPORT_JSON="$PWD/patch-report.json"
           export CODEX_LINUX_FEATURES_CONFIG CODEX_PATCH_REPORT_JSON
 
           cat > "$CODEX_LINUX_FEATURES_CONFIG" <<'JSON'
           {
-            "enabled": ["ui-tweaks"],
+            "enabled": ["ui-tweaks", "native-linux-tray"],
             "settings": {
               "ui-tweaks": {
                 "tweaks": {
@@ -186,8 +200,10 @@ jobs:
 
           node scripts/ci/validate-patch-report.js "$CODEX_PATCH_REPORT_JSON" \
             --require-enabled-feature ui-tweaks \
+            --require-enabled-feature native-linux-tray \
             --require-applied feature:ui-tweaks:appearance-dock-icon-main-process \
-            --require-applied feature:ui-tweaks:appearance-dock-icon-settings-row
+            --require-applied feature:ui-tweaks:appearance-dock-icon-settings-row \
+            --require-applied feature:native-linux-tray:retain-linux-tray
 
           test -f codex-app/resources/dock-icon/icon-chatgpt.png
           test -x codex-app/resources/dock-icon/sync-desktop-icon.sh
@@ -212,6 +228,7 @@ jobs:
           docker run --rm \
             -e UPSTREAM_SHA \
             -v "$RUNNER_TEMP/build-arch-package.sh:/build-arch-package.sh:ro" \
+            -v "$GITHUB_WORKSPACE/overlay-features/native-linux-tray:/overlay-native-linux-tray:ro" \
             -v "$GITHUB_WORKSPACE/arch-dist:/out" \
             archlinux:latest \
             /build-arch-package.sh
@@ -252,7 +269,7 @@ jobs:
           Upstream commit: \`$UPSTREAM_SHA\`
 
           Packages: AppImage, DEB, RPM, Arch Linux package, and SHA256 checksums.
-          Linux window icon: uses the upstream ui-tweaks Dock icon implementation and requires its current main-process and settings patches to pass validation before publishing.
+          Linux system tray: keeps the native Electron Tray alive on Linux and uses the upstream Dock icon implementation for its image. Both patches must pass validation before publishing.
 
           <!-- upstream-sha: $UPSTREAM_SHA -->
           EOF_NOTES
