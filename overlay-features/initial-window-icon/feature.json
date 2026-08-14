@@ -1,9 +1,0 @@
-{
-  "id": "initial-window-icon",
-  "title": "Initial Linux Window Icon",
-  "description": "Restores the BrowserWindow icon at construction time for X11/i3 taskbar consumers.",
-  "defaultEnabled": false,
-  "entrypoints": {
-    "patchDescriptors": "./patch.js"
-  }
-}
