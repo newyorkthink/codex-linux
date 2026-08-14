@@ -156,39 +156,53 @@ jobs:
           chown builder:builder /work
           chmod 0777 /out
 
+          cat > /tmp/build-as-builder.sh <<'BUILDER_SCRIPT'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          cd /work
+          git clone https://github.com/ilysenko/codex-desktop-linux.git
+          cd codex-desktop-linux
+          git checkout --detach "$UPSTREAM_SHA"
+          test "$(git rev-parse HEAD)" = "$UPSTREAM_SHA"
+          rustup default stable
+
+          CODEX_LINUX_FEATURES_CONFIG="$PWD/linux-features/features.codex-linux.json"
+          export CODEX_LINUX_FEATURES_CONFIG
+          printf "%s\n" "{\"enabled\":[\"ui-tweaks\"],\"settings\":{\"ui-tweaks\":{\"tweaks\":{\"appearance\":{\"dockIcon\":{\"enabled\":true}}}}}}" > "$CODEX_LINUX_FEATURES_CONFIG"
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("linux-features/ui-tweaks/patches/dock-icon.js")
+          text = path.read_text()
+          old = (
+              'const patchedTrayRegistration =\n'
+              '  "i=new l.Tray(process.platform===`linux`&&globalThis.codexLinuxDockIconImage&&!globalThis.codexLinuxDockIconImage.isEmpty()?globalThis.codexLinuxDockIconImage:n.defaultIcon,process.platform===`win32`&&l.app.isPackaged?RAe(t):void 0);if(!W9)return";'
+          )
+          new = (
+              'const patchedTrayRegistration =\n'
+              '  "i=new l.Tray(...(process.platform===`linux`?[globalThis.codexLinuxDockIconImage&&!globalThis.codexLinuxDockIconImage.isEmpty()?globalThis.codexLinuxDockIconImage:n.defaultIcon]:[n.defaultIcon,process.platform===`win32`&&l.app.isPackaged?RAe(t):void 0]));if(!W9&&process.platform!==`linux`)return";'
+          )
+          if text.count(old) != 1:
+              raise SystemExit("Unexpected upstream Dock icon tray contract; refusing to patch")
+          path.write_text(text.replace(old, new))
+          PY
+
+          make build-app
+          make pacman
+          cp dist/*.pkg.tar.zst /out/
+          BUILDER_SCRIPT
+
+          chmod +x /tmp/build-as-builder.sh
+          chown builder:builder /tmp/build-as-builder.sh
+
           runuser -u builder -- env \
             HOME=/home/builder \
             UPSTREAM_SHA="$UPSTREAM_SHA" \
             APPIMAGE_EXTRACT_AND_RUN=1 \
             CODEX_ENFORCE_CRITICAL_PATCHES=0 \
-            bash -lc '
-              set -euo pipefail
-              cd /work
-              git clone https://github.com/ilysenko/codex-desktop-linux.git
-              cd codex-desktop-linux
-              git checkout --detach "$UPSTREAM_SHA"
-              test "$(git rev-parse HEAD)" = "$UPSTREAM_SHA"
-              rustup default stable
-
-              CODEX_LINUX_FEATURES_CONFIG="$PWD/linux-features/features.codex-linux.json"
-              export CODEX_LINUX_FEATURES_CONFIG
-              printf "%s\n" "{\"enabled\":[\"ui-tweaks\"],\"settings\":{\"ui-tweaks\":{\"tweaks\":{\"appearance\":{\"dockIcon\":{\"enabled\":true}}}}}}" > "$CODEX_LINUX_FEATURES_CONFIG"
-
-              python3 - <<"PY"
-              from pathlib import Path
-              path = Path("linux-features/ui-tweaks/patches/dock-icon.js")
-              text = path.read_text()
-              old = "const patchedTrayRegistration =\\n  \\\"i=new l.Tray(process.platform===`linux`&&globalThis.codexLinuxDockIconImage&&!globalThis.codexLinuxDockIconImage.isEmpty()?globalThis.codexLinuxDockIconImage:n.defaultIcon,process.platform===`win32`&&l.app.isPackaged?RAe(t):void 0);if(!W9)return\\\";"
-              new = "const patchedTrayRegistration =\\n  \\\"i=new l.Tray(...(process.platform===`linux`?[globalThis.codexLinuxDockIconImage&&!globalThis.codexLinuxDockIconImage.isEmpty()?globalThis.codexLinuxDockIconImage:n.defaultIcon]:[n.defaultIcon,process.platform===`win32`&&l.app.isPackaged?RAe(t):void 0]));if(!W9&&process.platform!==`linux`)return\\\";"
-              if text.count(old) != 1:
-                  raise SystemExit("Unexpected upstream Dock icon tray contract; refusing to patch")
-              path.write_text(text.replace(old, new))
-              PY
-
-              make build-app
-              make pacman
-              cp dist/*.pkg.tar.zst /out/
-            '
+            /tmp/build-as-builder.sh
           ARCH_SCRIPT
 
           chmod +x "$RUNNER_TEMP/build-arch-package.sh"
