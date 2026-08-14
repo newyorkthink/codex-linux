@@ -64,6 +64,7 @@ jobs:
       UPSTREAM_SHA: ${{ needs.check.outputs.upstream_sha }}
       APPIMAGE_EXTRACT_AND_RUN: 1
       CODEX_ENFORCE_CRITICAL_PATCHES: 0
+      CODEX_LINUX_FEATURES_CONFIG: ${{ github.workspace }}/codex-desktop-linux/linux-features/features.codex-linux.json
     steps:
       - name: Install appimagetool
         run: |
@@ -79,76 +80,26 @@ jobs:
           git checkout --detach "$UPSTREAM_SHA"
           test "$(git rev-parse HEAD)" = "$UPSTREAM_SHA"
 
-      - name: Patch AppImage desktop integration
+      - name: Enable upstream Linux tray and window icons
         run: |
           set -euo pipefail
 
-          cd codex-desktop-linux
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path("packaging/appimage/AppRun")
-          text = path.read_text()
-          needle = 'exec "$APPDIR/opt/__PACKAGE_NAME__/start.sh" "$@"'
-          if text.count(needle) != 1:
-              raise SystemExit("Unexpected upstream AppRun layout; refusing to patch")
-
-          integration = r'''
-          install_user_desktop_entry() {
-              [ -n "${APPIMAGE:-}" ] || return 0
-              [ -f "$APPDIR/__PACKAGE_NAME__.png" ] || return 0
-
-              local data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
-              local applications_dir="$data_home/applications"
-              local icons_dir="$data_home/icons/hicolor/256x256/apps"
-              local desktop_file="$applications_dir/__PACKAGE_NAME__.desktop"
-              local icon_file="$icons_dir/__PACKAGE_NAME__.png"
-              local desktop_tmp
-              local escaped_appimage="$APPIMAGE"
-
-              mkdir -p "$applications_dir" "$icons_dir"
-              cp -f "$APPDIR/__PACKAGE_NAME__.png" "$icon_file"
-              chmod 0644 "$icon_file"
-
-              if [ ! -e "$desktop_file" ] ||
-                 { [ -f "$desktop_file" ] &&
-                   grep -Fxq 'X-Codex-Linux-AppImage-Integration=1' "$desktop_file"; }; then
-                  escaped_appimage="${escaped_appimage//\\/\\\\}"
-                  escaped_appimage="${escaped_appimage//\"/\\\"}"
-                  escaped_appimage="${escaped_appimage//\`/\\\`}"
-                  escaped_appimage="${escaped_appimage//\$/\\\$}"
-                  escaped_appimage="${escaped_appimage//%/%%}"
-
-                  desktop_tmp="$(mktemp "$applications_dir/.__PACKAGE_NAME__.desktop.XXXXXX")"
-                  cat > "$desktop_tmp" <<EOF_DESKTOP
-          [Desktop Entry]
-          Name=__PACKAGE_DISPLAY_NAME__
-          Comment=Community Linux distribution based on OpenAI ChatGPT
-          Exec="$escaped_appimage" %u
-          Icon=$icon_file
-          Terminal=false
-          Type=Application
-          Categories=Development;
-          MimeType=x-scheme-handler/codex;x-scheme-handler/codex-browser-sidebar;
-          Keywords=codex;openai;ai;coding;
-          StartupNotify=true
-          StartupWMClass=__PACKAGE_NAME__
-          X-GNOME-WMClass=__PACKAGE_NAME__
-          X-Codex-Linux-AppImage-Integration=1
-          EOF_DESKTOP
-                  chmod 0644 "$desktop_tmp"
-                  mv -f "$desktop_tmp" "$desktop_file"
-              fi
-
-              export CHROME_DESKTOP="__PACKAGE_NAME__.desktop"
-              export BAMF_DESKTOP_FILE_HINT="$desktop_file"
+          cat > "$CODEX_LINUX_FEATURES_CONFIG" <<'JSON'
+          {
+            "enabled": ["ui-tweaks"],
+            "settings": {
+              "ui-tweaks": {
+                "tweaks": {
+                  "appearance": {
+                    "dockIcon": {
+                      "enabled": true
+                    }
+                  }
+                }
+              }
+            }
           }
-
-          install_user_desktop_entry || true
-          '''
-
-          path.write_text(text.replace(needle, integration + "\n\n" + needle))
-          PY
+          JSON
 
       - name: Build AppImage, DEB and RPM
         run: |
@@ -193,6 +144,26 @@ jobs:
               git checkout --detach "$UPSTREAM_SHA"
               test "$(git rev-parse HEAD)" = "$UPSTREAM_SHA"
               rustup default stable
+
+              CODEX_LINUX_FEATURES_CONFIG="$PWD/linux-features/features.codex-linux.json"
+              export CODEX_LINUX_FEATURES_CONFIG
+              cat > "$CODEX_LINUX_FEATURES_CONFIG" <<"JSON"
+              {
+                "enabled": ["ui-tweaks"],
+                "settings": {
+                  "ui-tweaks": {
+                    "tweaks": {
+                      "appearance": {
+                        "dockIcon": {
+                          "enabled": true
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+              JSON
+
               make build-app
               make pacman
               cp dist/*.pkg.tar.zst /out/
