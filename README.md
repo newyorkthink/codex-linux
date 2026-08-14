@@ -24,6 +24,10 @@ GitHub Actions 每 30 分钟检查一次上游 `main` 的最新提交。只有�
 
 构建完成后会替换固定的 `latest` Release。仓库不使用 `actions/upload-artifact` 保存构建产物，最终软件包只保存在 Release 中。
 
+### 托盘图标排查记录
+
+Linux system tray / i3bar 图标的已尝试方案、失败原因、上游证据和禁止重复事项统一记录在 [`TRAY_DEBUG_HISTORY.md`](TRAY_DEBUG_HISTORY.md)。后续修改必须先对照该记录，避免重复试错。
+
 ### 上游与声明
 
 本仓库不是 OpenAI 官方项目，也不是上游项目的官方发布渠道。应用代码与 Linux 打包逻辑来自 [`ilysenko/codex-desktop-linux`](https://github.com/ilysenko/codex-desktop-linux)，请同时参考上游项目的说明与许可证。
@@ -51,6 +55,10 @@ A single rolling `latest` Release provides:
 GitHub Actions checks upstream `main` every 30 minutes. A full build runs only when a new upstream commit has not yet been published, so the same upstream revision is not rebuilt automatically. `workflow_dispatch` can also force a manual rebuild.
 
 After a successful build, the fixed `latest` Release is replaced. The workflow does not use `actions/upload-artifact`; final packages are stored only in the Release.
+
+### Tray debugging history
+
+All attempted Linux system-tray fixes, failed approaches, upstream evidence, and no-repeat rules are tracked in [`TRAY_DEBUG_HISTORY.md`](TRAY_DEBUG_HISTORY.md). Future tray changes must be checked against this history first.
 
 ### Upstream and disclaimer
 
