@@ -1,0 +1,182 @@
+name: Build Codex Desktop Linux
+
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Rebuild even if this upstream commit is already published
+        required: false
+        type: boolean
+        default: true
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/build.yml
+  schedule:
+    - cron: '17,47 * * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: codex-linux-latest
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Check upstream
+    runs-on: ubuntu-latest
+    outputs:
+      upstream_sha: ${{ steps.check.outputs.upstream_sha }}
+      should_build: ${{ steps.check.outputs.should_build }}
+    steps:
+      - name: Compare upstream with latest release
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force == true }}
+        run: |
+          set -euo pipefail
+
+          UPSTREAM_SHA="$(git ls-remote https://github.com/ilysenko/codex-desktop-linux.git refs/heads/main | awk '{print $1}')"
+          test -n "$UPSTREAM_SHA"
+
+          PUBLISHED_BODY="$(gh release view latest --json body --jq '.body' 2>/dev/null || true)"
+
+          if [ "$FORCE" = "true" ] || ! grep -Fq "<!-- upstream-sha: $UPSTREAM_SHA -->" <<<"$PUBLISHED_BODY"; then
+            SHOULD_BUILD=true
+          else
+            SHOULD_BUILD=false
+          fi
+
+          echo "upstream_sha=$UPSTREAM_SHA" >> "$GITHUB_OUTPUT"
+          echo "should_build=$SHOULD_BUILD" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build and publish packages
+    needs: check
+    if: needs.check.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      UPSTREAM_SHA: ${{ needs.check.outputs.upstream_sha }}
+      APPIMAGE_EXTRACT_AND_RUN: 1
+      CODEX_ENFORCE_CRITICAL_PATCHES: 0
+    steps:
+      - name: Install appimagetool
+        run: |
+          sudo wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage -O /usr/local/bin/appimagetool
+          sudo chmod +x /usr/local/bin/appimagetool
+
+      - name: Clone exact upstream revision
+        run: |
+          set -euo pipefail
+
+          git clone https://github.com/ilysenko/codex-desktop-linux.git
+          cd codex-desktop-linux
+          git checkout --detach "$UPSTREAM_SHA"
+          test "$(git rev-parse HEAD)" = "$UPSTREAM_SHA"
+
+      - name: Build AppImage, DEB and RPM
+        run: |
+          set -euo pipefail
+
+          cd codex-desktop-linux
+          bash scripts/install-deps.sh
+          make build-app
+          make appimage
+          make deb
+          make rpm
+
+      - name: Build Arch Linux package
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$GITHUB_WORKSPACE/arch-dist"
+
+          cat > "$RUNNER_TEMP/build-arch-package.sh" <<'ARCH_SCRIPT'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          pacman -Syu --noconfirm --needed \
+            base-devel ca-certificates curl dpkg git gnupg nodejs npm python \
+            rustup shadow tar unzip util-linux xz zstd
+
+          useradd --create-home builder
+          mkdir -p /work
+          chown builder:builder /work
+          chmod 0777 /out
+
+          runuser -u builder -- env \
+            HOME=/home/builder \
+            UPSTREAM_SHA="$UPSTREAM_SHA" \
+            APPIMAGE_EXTRACT_AND_RUN=1 \
+            CODEX_ENFORCE_CRITICAL_PATCHES=0 \
+            bash -lc '
+              set -euo pipefail
+              cd /work
+              git clone https://github.com/ilysenko/codex-desktop-linux.git
+              cd codex-desktop-linux
+              git checkout --detach "$UPSTREAM_SHA"
+              test "$(git rev-parse HEAD)" = "$UPSTREAM_SHA"
+              rustup default stable
+              make build-app
+              make pacman
+              cp dist/*.pkg.tar.zst /out/
+            '
+          ARCH_SCRIPT
+
+          chmod +x "$RUNNER_TEMP/build-arch-package.sh"
+
+          docker run --rm \
+            -e UPSTREAM_SHA \
+            -v "$RUNNER_TEMP/build-arch-package.sh:/build-arch-package.sh:ro" \
+            -v "$GITHUB_WORKSPACE/arch-dist:/out" \
+            archlinux:latest \
+            /build-arch-package.sh
+
+      - name: Validate release files
+        run: |
+          set -euo pipefail
+
+          mkdir -p release-assets
+
+          find codex-desktop-linux/dist -maxdepth 1 -type f \
+            \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) \
+            -exec cp -v {} release-assets/ \;
+
+          find arch-dist -maxdepth 1 -type f -name '*.pkg.tar.zst' \
+            -exec cp -v {} release-assets/ \;
+
+          compgen -G 'release-assets/*.AppImage' >/dev/null
+          compgen -G 'release-assets/*.deb' >/dev/null
+          compgen -G 'release-assets/*.rpm' >/dev/null
+          compgen -G 'release-assets/*.pkg.tar.zst' >/dev/null
+
+          sha256sum release-assets/* > release-assets/SHA256SUMS.txt
+          ls -lh release-assets
+
+      - name: Publish rolling latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          cat > release-notes.md <<EOF_NOTES
+          Automated build from the public upstream repository:
+          https://github.com/ilysenko/codex-desktop-linux
+
+          Upstream branch: main
+          Upstream commit: \`$UPSTREAM_SHA\`
+
+          Packages: AppImage, DEB, RPM, Arch Linux package, and SHA256 checksums.
+
+          <!-- upstream-sha: $UPSTREAM_SHA -->
+          EOF_NOTES
+
+          TAG_NAME="latest"
+          gh release delete $TAG_NAME -y --cleanup-tag || true
+          gh release create $TAG_NAME release-assets/* --title "Latest" --notes-file release-notes.md
