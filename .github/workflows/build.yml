@@ -80,7 +80,7 @@ jobs:
           git checkout --detach "$UPSTREAM_SHA"
           test "$(git rev-parse HEAD)" = "$UPSTREAM_SHA"
 
-      - name: Enable upstream Linux tray and window icons
+      - name: Restore Linux system tray icon
         run: |
           set -euo pipefail
 
@@ -101,6 +101,25 @@ jobs:
           }
           JSON
 
+          cd codex-desktop-linux
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("linux-features/ui-tweaks/patches/dock-icon.js")
+          text = path.read_text()
+          old = (
+              'const patchedTrayRegistration =\n'
+              '  "i=new l.Tray(process.platform===`linux`&&globalThis.codexLinuxDockIconImage&&!globalThis.codexLinuxDockIconImage.isEmpty()?globalThis.codexLinuxDockIconImage:n.defaultIcon,process.platform===`win32`&&l.app.isPackaged?RAe(t):void 0);if(!W9)return";'
+          )
+          new = (
+              'const patchedTrayRegistration =\n'
+              '  "i=new l.Tray(...(process.platform===`linux`?[globalThis.codexLinuxDockIconImage&&!globalThis.codexLinuxDockIconImage.isEmpty()?globalThis.codexLinuxDockIconImage:n.defaultIcon]:[n.defaultIcon,process.platform===`win32`&&l.app.isPackaged?RAe(t):void 0]));if(!W9&&process.platform!==`linux`)return";'
+          )
+          if text.count(old) != 1:
+              raise SystemExit("Unexpected upstream Dock icon tray contract; refusing to patch")
+          path.write_text(text.replace(old, new))
+          PY
+
       - name: Build AppImage, DEB and RPM
         run: |
           set -euo pipefail
@@ -108,6 +127,12 @@ jobs:
           cd codex-desktop-linux
           bash scripts/install-deps.sh
           make build-app
+
+          rm -rf "$RUNNER_TEMP/codex-asar-check"
+          npx --yes asar extract codex-app/resources/app.asar "$RUNNER_TEMP/codex-asar-check"
+          grep -R -Fq 'new l.Tray(...(process.platform===`linux`?' "$RUNNER_TEMP/codex-asar-check/.vite/build"
+          grep -R -Fq 'if(!W9&&process.platform!==`linux`)return' "$RUNNER_TEMP/codex-asar-check/.vite/build"
+
           make appimage
           make deb
           make rpm
@@ -148,6 +173,17 @@ jobs:
               CODEX_LINUX_FEATURES_CONFIG="$PWD/linux-features/features.codex-linux.json"
               export CODEX_LINUX_FEATURES_CONFIG
               printf "%s\n" "{\"enabled\":[\"ui-tweaks\"],\"settings\":{\"ui-tweaks\":{\"tweaks\":{\"appearance\":{\"dockIcon\":{\"enabled\":true}}}}}}" > "$CODEX_LINUX_FEATURES_CONFIG"
+
+              python3 - <<"PY"
+              from pathlib import Path
+              path = Path("linux-features/ui-tweaks/patches/dock-icon.js")
+              text = path.read_text()
+              old = "const patchedTrayRegistration =\\n  \\\"i=new l.Tray(process.platform===`linux`&&globalThis.codexLinuxDockIconImage&&!globalThis.codexLinuxDockIconImage.isEmpty()?globalThis.codexLinuxDockIconImage:n.defaultIcon,process.platform===`win32`&&l.app.isPackaged?RAe(t):void 0);if(!W9)return\\\";"
+              new = "const patchedTrayRegistration =\\n  \\\"i=new l.Tray(...(process.platform===`linux`?[globalThis.codexLinuxDockIconImage&&!globalThis.codexLinuxDockIconImage.isEmpty()?globalThis.codexLinuxDockIconImage:n.defaultIcon]:[n.defaultIcon,process.platform===`win32`&&l.app.isPackaged?RAe(t):void 0]));if(!W9&&process.platform!==`linux`)return\\\";"
+              if text.count(old) != 1:
+                  raise SystemExit("Unexpected upstream Dock icon tray contract; refusing to patch")
+              path.write_text(text.replace(old, new))
+              PY
 
               make build-app
               make pacman
