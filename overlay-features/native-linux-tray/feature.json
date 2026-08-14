@@ -1,9 +1,0 @@
-{
-  "id": "native-linux-tray",
-  "title": "Native Linux Tray Retention",
-  "description": "Restores native Electron system tray retention on Linux.",
-  "defaultEnabled": false,
-  "entrypoints": {
-    "patchDescriptors": "./patch.js"
-  }
-}
