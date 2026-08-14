@@ -36,7 +36,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force == true }}
+          FORCE: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.force == true) }}
         run: |
           set -euo pipefail
 
