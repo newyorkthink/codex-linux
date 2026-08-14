@@ -13,8 +13,6 @@ on:
       - main
     paths:
       - .github/workflows/build.yml
-      - overlay-features/initial-window-icon/**
-      - overlay-packaging/**
   schedule:
     - cron: '17,47 * * * *'
 
@@ -67,10 +65,8 @@ jobs:
       APPIMAGE_EXTRACT_AND_RUN: 1
       CODEX_ENFORCE_CRITICAL_PATCHES: 0
       CODEX_LINUX_FEATURES_CONFIG: ${{ github.workspace }}/codex-desktop-linux/linux-features/features.codex-linux.json
+      CODEX_PATCH_REPORT_JSON: ${{ github.workspace }}/codex-desktop-linux/patch-report.json
     steps:
-      - name: Checkout packaging overlay
-        uses: actions/checkout@v4
-
       - name: Install appimagetool
         run: |
           sudo wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage -O /usr/local/bin/appimagetool
@@ -85,22 +81,26 @@ jobs:
           git checkout --detach "$UPSTREAM_SHA"
           test "$(git rev-parse HEAD)" = "$UPSTREAM_SHA"
 
-      - name: Restore legacy Linux desktop identity and window icon
+      - name: Enable upstream Linux Dock icon support
         run: |
           set -euo pipefail
 
-          node --check overlay-features/initial-window-icon/patch.js
-          bash -n overlay-packaging/AppRun
-          python3 -m py_compile overlay-packaging/patch-launcher.py
-
-          rm -rf codex-desktop-linux/linux-features/initial-window-icon
-          cp -a overlay-features/initial-window-icon codex-desktop-linux/linux-features/initial-window-icon
-          cp overlay-packaging/AppRun codex-desktop-linux/packaging/appimage/AppRun
-          python3 overlay-packaging/patch-launcher.py codex-desktop-linux/launcher/start.sh.template
-
-          grep -Fq -- '--class=$CODEX_LINUX_APP_ID' codex-desktop-linux/launcher/start.sh.template
-          grep -Fq -- '--app-id=$CODEX_LINUX_APP_ID' codex-desktop-linux/launcher/start.sh.template
-          printf '%s\n' '{"enabled":["initial-window-icon"]}' > "$CODEX_LINUX_FEATURES_CONFIG"
+          cat > "$CODEX_LINUX_FEATURES_CONFIG" <<'JSON'
+          {
+            "enabled": ["ui-tweaks"],
+            "settings": {
+              "ui-tweaks": {
+                "tweaks": {
+                  "appearance": {
+                    "dockIcon": {
+                      "enabled": true
+                    }
+                  }
+                }
+              }
+            }
+          }
+          JSON
 
       - name: Build AppImage, DEB and RPM
         run: |
@@ -110,46 +110,24 @@ jobs:
           bash scripts/install-deps.sh
           make build-app
 
-          test -f codex-app/resources/icon-chatgpt.png
-          grep -Fq -- '--class=$CODEX_LINUX_APP_ID' codex-app/start.sh
-          grep -Fq -- '--app-id=$CODEX_LINUX_APP_ID' codex-app/start.sh
+          node scripts/ci/validate-patch-report.js "$CODEX_PATCH_REPORT_JSON" \
+            --require-enabled-feature ui-tweaks \
+            --require-applied feature:ui-tweaks:appearance-dock-icon-main-process \
+            --require-applied feature:ui-tweaks:appearance-dock-icon-settings-row
+
+          test -f codex-app/resources/dock-icon/icon-chatgpt.png
+          test -x codex-app/resources/dock-icon/sync-desktop-icon.sh
 
           rm -rf "$RUNNER_TEMP/codex-asar-check"
           npx --yes @electron/asar extract codex-app/resources/app.asar "$RUNNER_TEMP/codex-asar-check"
           MAIN_BUNDLE="$(find "$RUNNER_TEMP/codex-asar-check/.vite/build" -maxdepth 1 -type f -name 'main*.js' -print -quit)"
           test -n "$MAIN_BUNDLE"
-          grep -Fq '/*codexLinuxInitialWindowIcon*/' "$MAIN_BUNDLE"
-          grep -Fq 'icon-chatgpt.png' "$MAIN_BUNDLE"
+          grep -Fq 'codexLinuxApplyDockIcon' "$MAIN_BUNDLE"
+          grep -Fq 'BrowserWindow.getAllWindows()' "$MAIN_BUNDLE"
+          grep -Fq '.setIcon(s)' "$MAIN_BUNDLE"
           node --check "$MAIN_BUNDLE"
 
           make appimage
-
-          APPDIR_TEST="dist/appimage.AppDir"
-          test -x "$APPDIR_TEST/AppRun"
-          grep -Fq 'integrate_user_desktop' "$APPDIR_TEST/AppRun"
-          test -f "$APPDIR_TEST/codex-desktop.desktop"
-          test -f "$APPDIR_TEST/codex-desktop.png"
-
-          cp "$APPDIR_TEST/opt/codex-desktop/start.sh" "$RUNNER_TEMP/codex-start.sh.backup"
-          printf '#!/bin/sh\nexit 0\n' > "$APPDIR_TEST/opt/codex-desktop/start.sh"
-          chmod 0755 "$APPDIR_TEST/opt/codex-desktop/start.sh"
-          rm -rf "$RUNNER_TEMP/codex-home"
-          mkdir -p "$RUNNER_TEMP/codex-home"
-
-          HOME="$RUNNER_TEMP/codex-home" \
-          XDG_DATA_HOME="$RUNNER_TEMP/codex-home/.local/share" \
-          APPIMAGE="$RUNNER_TEMP/codex-desktop.AppImage" \
-            "$APPDIR_TEST/AppRun"
-
-          mv "$RUNNER_TEMP/codex-start.sh.backup" "$APPDIR_TEST/opt/codex-desktop/start.sh"
-          DESKTOP_TEST="$RUNNER_TEMP/codex-home/.local/share/applications/codex-desktop.desktop"
-          ICON_TEST="$RUNNER_TEMP/codex-home/.local/share/icons/hicolor/256x256/apps/codex-desktop.png"
-          test -f "$DESKTOP_TEST"
-          test -f "$ICON_TEST"
-          grep -Fq 'StartupWMClass=codex-desktop' "$DESKTOP_TEST"
-          grep -Fq 'Icon=codex-desktop' "$DESKTOP_TEST"
-          grep -Fq "Exec=\"$RUNNER_TEMP/codex-desktop.AppImage\" --show %u" "$DESKTOP_TEST"
-
           make deb
           make rpm
 
@@ -183,27 +161,36 @@ jobs:
           test "$(git rev-parse HEAD)" = "$UPSTREAM_SHA"
           rustup default stable
 
-          rm -rf linux-features/initial-window-icon
-          cp -a /overlay-feature linux-features/initial-window-icon
-          node --check linux-features/initial-window-icon/patch.js
-          python3 /overlay-packaging/patch-launcher.py launcher/start.sh.template
-
           CODEX_LINUX_FEATURES_CONFIG="$PWD/linux-features/features.codex-linux.json"
-          export CODEX_LINUX_FEATURES_CONFIG
-          printf '%s\n' '{"enabled":["initial-window-icon"]}' > "$CODEX_LINUX_FEATURES_CONFIG"
+          CODEX_PATCH_REPORT_JSON="$PWD/patch-report.json"
+          export CODEX_LINUX_FEATURES_CONFIG CODEX_PATCH_REPORT_JSON
+
+          cat > "$CODEX_LINUX_FEATURES_CONFIG" <<'JSON'
+          {
+            "enabled": ["ui-tweaks"],
+            "settings": {
+              "ui-tweaks": {
+                "tweaks": {
+                  "appearance": {
+                    "dockIcon": {
+                      "enabled": true
+                    }
+                  }
+                }
+              }
+            }
+          }
+          JSON
 
           make build-app
 
-          test -f codex-app/resources/icon-chatgpt.png
-          grep -Fq -- '--class=$CODEX_LINUX_APP_ID' codex-app/start.sh
-          grep -Fq -- '--app-id=$CODEX_LINUX_APP_ID' codex-app/start.sh
-          rm -rf /tmp/codex-asar-check
-          npx --yes @electron/asar extract codex-app/resources/app.asar /tmp/codex-asar-check
-          MAIN_BUNDLE="$(find /tmp/codex-asar-check/.vite/build -maxdepth 1 -type f -name 'main*.js' -print -quit)"
-          test -n "$MAIN_BUNDLE"
-          grep -Fq '/*codexLinuxInitialWindowIcon*/' "$MAIN_BUNDLE"
-          grep -Fq 'icon-chatgpt.png' "$MAIN_BUNDLE"
-          node --check "$MAIN_BUNDLE"
+          node scripts/ci/validate-patch-report.js "$CODEX_PATCH_REPORT_JSON" \
+            --require-enabled-feature ui-tweaks \
+            --require-applied feature:ui-tweaks:appearance-dock-icon-main-process \
+            --require-applied feature:ui-tweaks:appearance-dock-icon-settings-row
+
+          test -f codex-app/resources/dock-icon/icon-chatgpt.png
+          test -x codex-app/resources/dock-icon/sync-desktop-icon.sh
 
           make pacman
           find dist -maxdepth 1 -type f -name '*.pkg.tar.zst' ! -name 'codex-desktop-latest.pkg.tar.zst' -exec cp -v {} /out/ \;
@@ -225,8 +212,6 @@ jobs:
           docker run --rm \
             -e UPSTREAM_SHA \
             -v "$RUNNER_TEMP/build-arch-package.sh:/build-arch-package.sh:ro" \
-            -v "$GITHUB_WORKSPACE/overlay-features/initial-window-icon:/overlay-feature:ro" \
-            -v "$GITHUB_WORKSPACE/overlay-packaging:/overlay-packaging:ro" \
             -v "$GITHUB_WORKSPACE/arch-dist:/out" \
             archlinux:latest \
             /build-arch-package.sh
@@ -267,7 +252,7 @@ jobs:
           Upstream commit: \`$UPSTREAM_SHA\`
 
           Packages: AppImage, DEB, RPM, Arch Linux package, and SHA256 checksums.
-          Linux icon compatibility: restores the legacy Electron app ID and BrowserWindow icon, and AppImage registers its user-level XDG desktop/icon identity before launch.
+          Linux window icon: uses the upstream ui-tweaks Dock icon implementation and requires its current main-process and settings patches to pass validation before publishing.
 
           <!-- upstream-sha: $UPSTREAM_SHA -->
           EOF_NOTES
