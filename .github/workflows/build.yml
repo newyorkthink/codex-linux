@@ -147,22 +147,7 @@ jobs:
 
               CODEX_LINUX_FEATURES_CONFIG="$PWD/linux-features/features.codex-linux.json"
               export CODEX_LINUX_FEATURES_CONFIG
-              cat > "$CODEX_LINUX_FEATURES_CONFIG" <<"JSON"
-              {
-                "enabled": ["ui-tweaks"],
-                "settings": {
-                  "ui-tweaks": {
-                    "tweaks": {
-                      "appearance": {
-                        "dockIcon": {
-                          "enabled": true
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-              JSON
+              printf "%s\n" "{\"enabled\":[\"ui-tweaks\"],\"settings\":{\"ui-tweaks\":{\"tweaks\":{\"appearance\":{\"dockIcon\":{\"enabled\":true}}}}}}" > "$CODEX_LINUX_FEATURES_CONFIG"
 
               make build-app
               make pacman
