@@ -1,0 +1,9 @@
+{
+  "id": "linux-tray-single-arg",
+  "title": "Linux Single-Argument Tray",
+  "description": "Calls Electron Tray with one argument on Linux while preserving the Windows GUID path, matching upstream PR #1247.",
+  "defaultEnabled": false,
+  "entrypoints": {
+    "patchDescriptors": "./patch.js"
+  }
+}
