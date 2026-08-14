@@ -1,5 +1,7 @@
 "use strict";
 
+const { findMatchingBrace } = require("../../scripts/patches/lib/minified-js.js");
+
 const MARKER = "codexLinuxInitialWindowIcon";
 const MARKER_COMMENT = `/*${MARKER}*/`;
 const BROWSER_WINDOW_PATTERN = /new\s+([A-Za-z_$][\w$]*)\.BrowserWindow\(\{/g;
@@ -18,21 +20,33 @@ function applyInitialWindowIconPatch(source) {
     return source;
   }
 
-  let patchedCount = 0;
-  const patched = source.replace(BROWSER_WINDOW_PATTERN, (match, electronAlias) => {
-    patchedCount += 1;
-    return (
-      `new ${electronAlias}.BrowserWindow({${MARKER_COMMENT}` +
-      `...(process.platform===\`linux\`?{icon:${electronAlias}.nativeImage.createFromPath(process.resourcesPath+\`/icon-chatgpt.png\`)}:{}),`
-    );
-  });
+  const insertions = [];
+  for (const match of matches) {
+    const objectOpenIndex = match.index + match[0].length - 1;
+    const objectCloseIndex = findMatchingBrace(source, objectOpenIndex);
+    if (objectCloseIndex === -1) {
+      throw new Error("Could not locate BrowserWindow options closing brace for Linux icon patch");
+    }
 
-  if (patchedCount === 0) {
-    console.warn("WARN: Initial Linux window icon patch made no changes");
-    return source;
+    const beforeClose = source.slice(objectOpenIndex + 1, objectCloseIndex).trimEnd();
+    const separator = beforeClose.length === 0 || beforeClose.endsWith(",") ? "" : ",";
+    const iconOption =
+      `${separator}${MARKER_COMMENT}...(` +
+      "process.platform===`linux`" +
+      "?{icon:process.resourcesPath+`/icon-chatgpt.png`}" +
+      ":{})";
+
+    insertions.push({ index: objectCloseIndex, text: iconOption });
   }
 
-  console.log(`Restored constructor-time Linux BrowserWindow icon on ${patchedCount} window constructor(s)`);
+  let patched = source;
+  for (const insertion of insertions.sort((a, b) => b.index - a.index)) {
+    patched = patched.slice(0, insertion.index) + insertion.text + patched.slice(insertion.index);
+  }
+
+  console.log(
+    `Restored final Linux BrowserWindow icon option on ${insertions.length} window constructor(s)`,
+  );
   return patched;
 }
 
