@@ -141,8 +141,12 @@ jobs:
           set -euo pipefail
 
           pacman -Syu --noconfirm --needed \
-            base-devel ca-certificates curl dpkg git gnupg nodejs npm python \
-            rustup shadow tar unzip util-linux xz zstd
+            alsa-lib at-spi2-core atk base-devel ca-certificates cairo curl dbus \
+            dpkg expat gdk-pixbuf2 git glib2 gnupg graphite gtk3 libcups libdrm \
+            libglvnd libnotify libusb libx11 libxcb libxcomposite libxdamage \
+            libxext libxfixes libxkbcommon libxrandr mesa nodejs npm nspr nss \
+            openssl pango python rustup shadow systemd-libs tar unzip util-linux \
+            xz zstd
 
           useradd --create-home builder
           mkdir -p /work
