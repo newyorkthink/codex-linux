@@ -26,7 +26,7 @@ GitHub Actions 每 30 分钟检查一次上游 `main` 的最新提交。只有�
 
 ### 托盘图标排查记录
 
-Linux system tray / i3bar 图标的已尝试方案、失败原因、上游证据和禁止重复事项统一记录在 [`TRAY_DEBUG_HISTORY.md`](TRAY_DEBUG_HISTORY.md)。后续修改必须先对照该记录，避免重复试错。
+Linux system tray / i3bar 图标的已尝试方案、失败原因、上游证据和禁止重复事项统一记录在 [`TRAY_DEBUG_HISTORY.md`](TRAY_DEBUG_HISTORY.md)。当前构建使用一个原子补丁同时恢复 Linux 单参数 `Tray` 构造和托盘保留；不修改用户的 i3 配置，也不启用 Dock-icon / `.desktop` 实验。
 
 ### 上游与声明
 
@@ -58,7 +58,7 @@ After a successful build, the fixed `latest` Release is replaced. The workflow d
 
 ### Tray debugging history
 
-All attempted Linux system-tray fixes, failed approaches, upstream evidence, and no-repeat rules are tracked in [`TRAY_DEBUG_HISTORY.md`](TRAY_DEBUG_HISTORY.md). Future tray changes must be checked against this history first.
+All attempted Linux system-tray fixes, failed approaches, upstream evidence, and no-repeat rules are tracked in [`TRAY_DEBUG_HISTORY.md`](TRAY_DEBUG_HISTORY.md). The current build applies one atomic patch that combines the Linux one-argument `Tray` constructor with tray retention; it does not modify i3 or enable the Dock-icon / `.desktop` experiments.
 
 ### Upstream and disclaimer
 

@@ -85,7 +85,7 @@ jobs:
           git checkout --detach "$UPSTREAM_SHA"
           test "$(git rev-parse HEAD)" = "$UPSTREAM_SHA"
 
-      - name: Apply isolated Linux Tray constructor fix
+      - name: Apply atomic Linux tray registration fix
         run: |
           set -euo pipefail
 
@@ -111,28 +111,14 @@ jobs:
 
           node scripts/ci/validate-patch-report.js "$CODEX_PATCH_REPORT_JSON" \
             --require-enabled-feature linux-tray-single-arg \
-            --require-applied feature:linux-tray-single-arg:single-argument-tray-on-linux
+            --require-applied feature:linux-tray-single-arg:linux-tray-registration
 
           rm -rf "$RUNNER_TEMP/codex-asar-check"
           npx --yes @electron/asar extract codex-app/resources/app.asar "$RUNNER_TEMP/codex-asar-check"
           MAIN_BUNDLE="$(find "$RUNNER_TEMP/codex-asar-check/.vite/build" -maxdepth 1 -type f -name 'main*.js' -print -quit)"
           test -n "$MAIN_BUNDLE"
 
-          # The exact fix from upstream PR #1247 must be present.
-          grep -Fq 'codexLinuxSingleArgTray' "$MAIN_BUNDLE"
-
-          # Keep this diagnostic build isolated: do not silently reintroduce the
-          # previously failed Dock-icon or retention experiments.
-          if grep -Fq 'codexLinuxApplyDockIcon' "$MAIN_BUNDLE"; then
-            echo 'Unexpected ui-tweaks Dock icon patch detected' >&2
-            exit 1
-          fi
-          if grep -Fq 'codexLinuxNativeTrayRetention' "$MAIN_BUNDLE"; then
-            echo 'Unexpected legacy tray retention patch detected' >&2
-            exit 1
-          fi
-
-          node --check "$MAIN_BUNDLE"
+          node "$GITHUB_WORKSPACE/overlay-features/linux-tray-single-arg/test.js" "$MAIN_BUNDLE"
 
           make appimage
           make deb
@@ -187,7 +173,7 @@ jobs:
 
           node scripts/ci/validate-patch-report.js "$CODEX_PATCH_REPORT_JSON" \
             --require-enabled-feature linux-tray-single-arg \
-            --require-applied feature:linux-tray-single-arg:single-argument-tray-on-linux
+            --require-applied feature:linux-tray-single-arg:linux-tray-registration
 
           make pacman
           find dist -maxdepth 1 -type f -name '*.pkg.tar.zst' ! -name 'codex-desktop-latest.pkg.tar.zst' -exec cp -v {} /out/ \;
@@ -250,7 +236,7 @@ jobs:
           Upstream commit: \`$UPSTREAM_SHA\`
 
           Packages: AppImage, DEB, RPM, Arch Linux package, and SHA256 checksums.
-          Linux system tray: isolated fix based on upstream PR #1247. Linux calls Electron Tray with one argument; Windows keeps its GUID argument. Optional Dock-icon tweaks and the previous retention experiment are disabled in this build.
+          Linux system tray: atomically restores the two coupled conditions from the older working path: Linux calls Electron Tray with one argument and keeps that tray alive past the upstream feature gate. Windows keeps its GUID and original gate behavior. Dock-icon and desktop integration experiments remain disabled.
 
           <!-- upstream-sha: $UPSTREAM_SHA -->
           EOF_NOTES

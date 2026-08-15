@@ -1,7 +1,12 @@
-# Linux Single-Argument Tray
+# Linux Tray Registration Compatibility
 
-该 overlay 只解决一个已知问题：Linux 上 Electron `Tray` 必须只接收图标这一个参数。
+This overlay restores the complete tray behavior that existed in the older working Linux build path.
 
-依据：上游 `ilysenko/codex-desktop-linux` PR #1247 明确说明，Linux 使用单参数 `Tray` 可恢复 StatusNotifier tray registration；Windows 继续保留 GUID 第二参数。
+The current official bundle contains two coupled conditions that can suppress the Linux StatusNotifier item:
 
-本 feature 不修改 i3 配置、不注册用户级 `.desktop`、不修改 `BrowserWindow` 图标、不启用 `ui-tweaks` Dock icon，也不做额外 Tray retention。这样可以单独验证核心 system tray 注册问题。
+1. Electron `Tray` receives a second `undefined` argument on Linux.
+2. The newly created tray is immediately destroyed while the upstream tray flag is false.
+
+Fixing only the constructor still permits immediate destruction. Fixing only retention leaves the two-argument Linux constructor that upstream PR `ilysenko/codex-desktop-linux#1247` identified as preventing StatusNotifier registration. This feature changes both conditions atomically, while preserving the Windows GUID path and the non-Linux feature gate.
+
+It does not modify i3, write user-level `.desktop` files, patch `BrowserWindow` icons, enable the optional Dock-icon feature, or add AppIndicator libraries. The patch fails on upstream contract drift instead of publishing a partially modified bundle.

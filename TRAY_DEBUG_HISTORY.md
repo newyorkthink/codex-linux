@@ -9,6 +9,9 @@
 
 - 用户环境中的 i3bar system tray 本身正常，其他应用图标正常显示。
 - Codex 主窗口能够正常启动，但 **Codex 没有在 system tray 中出现图标**。
+- 根因已定位到 2026-08-12 上游 PR `#1317` 的官方 Linux 包迁移：迁移把旧工作路径中的核心 `linux-tray` 兼容补丁整体移除，改为默认保留官方 `app.asar`。
+- 当前官方 bundle 同时存在两个耦合条件：Linux `Tray` 仍收到第二个 `undefined` 参数，并且上游 tray flag 为 false 时会立即执行 `tray.destroy()`。
+- 之前的 retention-only 构建只修第二项，single-argument-only 构建只修第一项；两者都不完整，所以均未出现 StatusNotifier 图标。
 - 单纯修改 `BrowserWindow` 图标、`.desktop`、`StartupWMClass`、Dock icon 都不能证明 StatusNotifier 已注册。
 - 上游已经有与此症状高度一致的历史问题：
   - `#1052`：Stock Electron tray readiness/lifetime 兼容问题。
@@ -108,6 +111,21 @@
 
 规则：以后必须以实际 D-Bus/StatusNotifier 注册证据判断，不再仅凭“可能缺某个库”猜测。
 
+
+### 7. 单独的 Linux 单参数 Tray 构造补丁
+
+做过：
+
+- 只把 Linux 的 `new Tray(icon, undefined)` 改成单参数 `new Tray(icon)`。
+- Windows GUID 路径保持不变，并关闭 Dock-icon 与旧 retention 实验。
+- Action `31837061805` 成功构建并发布。
+
+最终运行结果：**仍然没有 system tray 图标。**
+
+原因：当前 bundle 紧接着仍执行 `if (!trayEnabled) return tray.destroy(), null`；构造成功后立即销毁，单独修构造参数不能保留 StatusNotifier item。
+
+规则：**不得再单独应用 constructor-only 或 retention-only 补丁；两个条件必须在同一个原子补丁中同时验证和修改。**
+
 ## 上游关键证据
 
 ### `#1100`：retention 修复存在，但仍无 tray
@@ -140,32 +158,25 @@
 
 这条是目前最重要、与当前症状最直接的已验证方向。
 
-## 当前构建为什么仍然不可信
+同时，`#1247` 合并时的历史 `applyLinuxTrayPatch` 已经包含 tray retention；PR 新增的是在该保留路径上再规范化 Linux 构造参数。因此只复制 PR 的 constructor 变化、却删除 retention，并不等价于 `#1247` 的完整工作状态。
 
-最近一次成功构建 `31809697451` 只能证明：
+## 当前失败构建的完整结论
 
-- patch descriptor applied；
-- ASAR JS 语法正确；
-- AppImage / DEB / RPM / Arch 包成功生成；
-- Release 成功发布。
+- retention-only 构建 `31809697451`：Tray 不再被 gate 销毁，但 Linux 仍使用两参数构造；实机无图标。
+- single-argument-only 构建 `31837061805`：Linux 改为单参数构造，但 Tray 仍被 gate 销毁；实机截图再次确认无图标。
+- 两次结果与历史上游路径一致地证明：这不是 i3bar 配置、BrowserWindow 图标、desktop entry 或 AppIndicator 动态库问题，而是两个 tray 条件被拆开修复。
 
-它**没有证明**：
-
-- `new Tray(...)` 在 Linux 上以正确参数调用；
-- StatusNotifier item 已注册；
-- i3bar 能看到 Codex tray item。
-
-因此以后 CI 不允许把“静态 grep 通过”写成“tray fixed”。
+Action 成功只能证明静态补丁和打包通过；最终仍以用户实机 StatusNotifier / i3bar 图标为验收。
 
 ## 下一步固定策略
 
-1. **先停止继续叠加 XDG / BrowserWindow / Dock-icon / retention 补丁。**
-2. 以 `#1247` 为基线检查当前官方 Linux package 的实际 `new Tray(...)` 调用形状。
-3. 如果当前官方 Linux bundle 又回到了 `new Tray(icon, undefined-or-guid)`，只做一件事：Linux 改成 **单参数 `new Tray(icon)`**，Windows 保持 GUID。
-4. 核心 tray 验证先禁用所有 optional features，按上游维护者对 `#1100` 的要求隔离问题。
-5. 只有核心 tray 正常后，再单独恢复 `ui-tweaks/dockIcon`；不能两者一起改，避免无法归因。
-6. 每次发布前记录：上游 SHA、官方 package 版本、Tray constructor 形状、应用的 patch id。
-7. 用户实际 i3bar 截图是最终验收；在此之前不得标记“已修复”。
+1. 只保留一个 `linux-tray-single-arg` feature，但其实现必须原子处理两个条件：
+   - Linux 只调用单参数 `new Tray(icon)`；
+   - Linux 不经过当前 `trayEnabled=false` 的立即销毁 gate。
+2. Windows 继续使用 GUID 第二参数，且非 Linux 平台的原 gate 行为保持不变。
+3. 不启用 `ui-tweaks/dockIcon`，不写用户级 `.desktop`，不修改 `BrowserWindow` 或 i3 配置。
+4. CI 必须验证：新组合 marker 恰好一个、两个旧 marker 均不存在、Dock-icon marker 不存在、旧未修 factory 不存在、最终 main bundle 可解析。
+5. 每次发布记录上游 SHA 与 patch id；用户实际 i3bar 截图仍是最终验收，在此之前不得标记“已修复”。
 
 ## 禁止重复犯错
 
@@ -179,6 +190,6 @@
 
 ## 当前状态
 
-**未修复。**
+**组合修复已完成静态设计与测试，等待新 Release 的实机验收。**
 
-最后一次用户实机验证：AppImage 主窗口正常，i3bar system tray 中仍没有 Codex 小图标。
+最后一次用户实机验证对象是 single-argument-only 构建：AppImage 主窗口正常，i3bar system tray 中仍没有 Codex 小图标。
