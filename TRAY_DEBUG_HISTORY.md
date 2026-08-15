@@ -8,7 +8,8 @@
 ## 当前结论
 
 - 用户环境中的 i3bar system tray 本身正常，其他应用图标正常显示。
-- Codex 主窗口能够正常启动，但 **Codex 没有在 system tray 中出现图标**。
+- 官方 Owl 运行时版本的 Codex 主窗口能够正常启动，但 **Codex 没有在 system tray 中出现图标**。
+- 2026-08-15 最终 i3bar Fixed AppImage 已通过 Kali Linux + i3wm 实机验收：ChatGPT 托盘图标正常出现，右键菜单可以正常打开。
 - 2026-08-15 对最终 AppImage 的原生运行时做符号级对比后确认了根因：官方 Owl 42.3 二进制完全没有 `gtk_status_icon_new`、`gtk_status_icon_set_from_pixbuf`、`gtk_status_icon_set_tooltip_text`、`gtk_status_icon_set_visible`、`gtk_status_icon_position_menu`。
 - classic i3bar tray 使用 XEmbed；同版本标准 Electron 42.3 仍导入上述五个 GtkStatusIcon 符号。因此 Owl 无法在该 i3bar 中创建可见图标，任何只改 `app.asar` JavaScript 的补丁都无法补回缺失的原生后端。
 - 当前策略保留最新上游与当前官方 Linux 应用资源，同时恢复拆分 bundle 中缺失的两段 tray 兼容逻辑；随后把 Owl 替换为同版本标准 Electron，并按标准 Electron ABI 重编译 `better-sqlite3` 与 `node-pty`。
@@ -206,13 +207,14 @@
 
 Action 成功只能证明静态补丁和打包通过；最终仍以用户实机 StatusNotifier / i3bar 图标为验收。
 
-## 下一步固定策略
+## 最终固定策略
 
-1. 继续跟随上游 `main` 并使用当前官方 Linux 应用资源，不回退 ChatGPT 代码。
-2. 在当前拆分 bundle 中同时应用 tray 注册补丁与 readiness/强引用补丁，缺少任一命中都禁止打包。
-3. 下载与官方包声明版本完全一致的标准 Linux Electron，并校验官方 SHA256。
-4. 为标准 Electron ABI 重编译 `better-sqlite3` 与 `node-pty`；CI 必须实际加载两个模块，并确认打包后的运行时含五个 `gtk_status_icon_*` 符号。
-5. 不启用额外 Dock-icon / `.desktop` overlay；用户实际 i3bar 截图仍是最终验收，在此之前不得标记“已修复”。
+1. 每轮先构建独立的 Stock AppImage：空 feature 配置、官方应用资源、官方原生运行时，不应用本仓库托盘补丁。
+2. i3bar Fixed 的全部代码只保存在 `variants/i3bar-fixed/`，不得污染 Stock 构建路径。
+3. 只有当前 bundle 仍匹配已验证合同且 Electron 主版本仍为 `42` 时，才应用 tray 注册、readiness/强引用和标准 Electron 替换。
+4. 下载与官方包声明版本完全一致的标准 Linux Electron并校验官方 SHA256；为其 ABI 重编译 `better-sqlite3` 与 `node-pty`，并确认五个 `gtk_status_icon_*` 符号。
+5. 如果上游修改或修复托盘合同，自动跳过旧 Fixed 补丁并继续发布 Stock，禁止通过放宽唯一匹配强行适配。
+6. 不启用额外 Dock-icon / `.desktop` overlay，不修改用户 i3 或主机系统配置。
 
 ## 禁止重复犯错
 
@@ -226,6 +228,6 @@ Action 成功只能证明静态补丁和打包通过；最终仍以用户实机 
 
 ## 当前状态
 
-**此前的 split-bundle-only 构建已被实机否定。当前改动保留完整 split-bundle overlay，并新增同版本标准 Electron 替换与原生 ABI 重编译；托盘专项 Node 测试 8/8、真实 AppImage 打包及运行时/原生模块校验均已通过，Release 构建和用户实机验收仍待完成。**
+**最终修复已经定版：完整 split-bundle overlay、同版本标准 Electron、原生 ABI 重编译和五项 XEmbed 符号校验均已通过；用户实机确认 i3bar 托盘图标与右键菜单正常。**
 
-最后一次用户实机验证对象是 Owl 42.3 构建：AppImage 主窗口正常，i3bar system tray 中仍没有 ChatGPT 小图标。
+已验证修复基线为提交 `62b75ab`、Action `31859648312` 生成的 i3bar Fixed AppImage。后续发布采用 Stock / i3bar Fixed 双版本隔离，不再改动当前稳定补丁本体。

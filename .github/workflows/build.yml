@@ -13,8 +13,7 @@ on:
       - main
     paths:
       - .github/workflows/build.yml
-      - overlay-features/linux-tray-single-arg/**
-      - scripts/install-stock-electron-runtime.sh
+      - variants/i3bar-fixed/**
   schedule:
     - cron: "17,47 * * * *"
 
@@ -57,7 +56,7 @@ jobs:
           echo "should_build=$SHOULD_BUILD" >> "$GITHUB_OUTPUT"
 
   build:
-    name: Build and publish packages
+    name: Build and publish Stock and i3bar Fixed variants
     needs: check
     if: needs.check.outputs.should_build == 'true'
     runs-on: ubuntu-latest
@@ -65,12 +64,17 @@ jobs:
     env:
       UPSTREAM_SHA: ${{ needs.check.outputs.upstream_sha }}
       APPIMAGE_EXTRACT_AND_RUN: 1
-      CODEX_LINUX_FEATURES_CONFIG: ${{ github.workspace }}/codex-desktop-linux/linux-features/features.codex-linux.json
-      CODEX_PATCH_REPORT_JSON: ${{ github.workspace }}/codex-desktop-linux/patch-report.json
       CODEX_STOCK_ELECTRON_CACHE_DIR: /tmp/codex-stock-electron
       NPM_CONFIG_CACHE: /tmp/codex-npm-cache
+      STOCK_FEATURES_CONFIG: /tmp/codex-features-stock.json
+      STOCK_PATCH_REPORT_JSON: /tmp/codex-report-stock/patch-report.json
+      I3BAR_FIXED_FEATURES_CONFIG: /tmp/codex-features-i3bar-fixed.json
+      I3BAR_FIXED_PATCH_REPORT_JSON: /tmp/codex-report-i3bar-fixed/patch-report.json
+      STOCK_DIST_DIR: ${{ github.workspace }}/dist-stock
+      I3BAR_FIXED_DIST_DIR: ${{ github.workspace }}/dist-i3bar-fixed
+      RELEASE_ASSETS_DIR: ${{ github.workspace }}/release-assets
     steps:
-      - name: Checkout packaging overlay
+      - name: Checkout packaging repository
         uses: actions/checkout@v4
 
       - name: Install appimagetool
@@ -87,50 +91,136 @@ jobs:
           git checkout --detach "$UPSTREAM_SHA"
           test "$(git rev-parse HEAD)" = "$UPSTREAM_SHA"
 
-      - name: Apply complete legacy Linux tray compatibility
+      - name: Build Stock AppImage from unmodified official resources
         run: |
           set -euo pipefail
 
-          node --check overlay-features/linux-tray-single-arg/patch.js
-          node overlay-features/linux-tray-single-arg/test.js
+          PACKAGE_VERSION="$(date -u +%Y.%m.%d.%H%M%S)"
+          echo "PACKAGE_VERSION=$PACKAGE_VERSION" >> "$GITHUB_ENV"
+          mkdir -p "$STOCK_DIST_DIR" "$RELEASE_ASSETS_DIR"
+
+          cat > "$STOCK_FEATURES_CONFIG" <<'JSON'
+          {
+            "enabled": []
+          }
+          JSON
+
+          cd codex-desktop-linux
+          bash scripts/install-deps.sh
+
+          CODEX_LINUX_FEATURES_CONFIG="$STOCK_FEATURES_CONFIG" \
+          CODEX_PATCH_REPORT_JSON="$STOCK_PATCH_REPORT_JSON" \
+            make build-app
+
+          node - "$STOCK_PATCH_REPORT_JSON" <<'NODE'
+          const fs = require("node:fs");
+          const reportPath = process.argv[2];
+          const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+          if (!Array.isArray(report.enabledFeatures) || report.enabledFeatures.length !== 0) {
+            throw new Error("Stock build unexpectedly enabled a Linux feature");
+          }
+          const changed = (report.patches ?? []).filter((patch) =>
+            patch.status === "applied" || patch.status === "applied-with-warnings",
+          );
+          if (changed.length !== 0) {
+            throw new Error(`Stock build unexpectedly applied patches: ${changed.map((item) => item.name).join(", ")}`);
+          }
+          console.log("Stock patch report: no enabled features or applied patches");
+          NODE
+
+          CODEX_LINUX_FEATURES_CONFIG="$STOCK_FEATURES_CONFIG" \
+          DIST_DIR_OVERRIDE="$STOCK_DIST_DIR" \
+          APPIMAGE_APPDIR_OVERRIDE="$RUNNER_TEMP/codex-stock.AppDir" \
+          PACKAGE_VERSION="$PACKAGE_VERSION" \
+            make appimage
+
+          mapfile -t stock_images < <(find "$STOCK_DIST_DIR" -maxdepth 1 -type f -name '*.AppImage' -print)
+          test "${#stock_images[@]}" -eq 1
+          install -m 0755 "${stock_images[0]}" "$RELEASE_ASSETS_DIR/codex-desktop-stock-x86_64.AppImage"
+
+      - name: Detect whether the isolated i3bar fix still applies
+        id: tray_contract
+        run: |
+          set -euo pipefail
+
+          node --check variants/i3bar-fixed/detect-upstream-contract.js
+          node variants/i3bar-fixed/detect-upstream-contract.test.js
+
+          rm -rf "$RUNNER_TEMP/codex-stock-asar"
+          npx --yes @electron/asar extract \
+            codex-desktop-linux/codex-app/resources/app.asar \
+            "$RUNNER_TEMP/codex-stock-asar"
+
+          node variants/i3bar-fixed/detect-upstream-contract.js \
+            "$RUNNER_TEMP/codex-stock-asar" \
+            codex-desktop-linux/codex-app/ChatGPT \
+            codex-desktop-linux/codex-app/version \
+            "$GITHUB_OUTPUT"
+
+      - name: Build isolated i3bar Fixed AppImage, DEB and RPM
+        if: steps.tray_contract.outputs.mode == 'apply'
+        run: |
+          set -euo pipefail
+
+          FIXED_ROOT="$GITHUB_WORKSPACE/variants/i3bar-fixed"
+          FIXED_FEATURE="$FIXED_ROOT/overlay-features/linux-tray-single-arg"
+          mkdir -p "$I3BAR_FIXED_DIST_DIR"
+
+          node --check "$FIXED_FEATURE/patch.js"
+          node "$FIXED_FEATURE/test.js"
 
           rm -rf codex-desktop-linux/linux-features/linux-tray-single-arg
-          cp -a overlay-features/linux-tray-single-arg codex-desktop-linux/linux-features/linux-tray-single-arg
+          cp -a "$FIXED_FEATURE" codex-desktop-linux/linux-features/linux-tray-single-arg
 
-          cat > "$CODEX_LINUX_FEATURES_CONFIG" <<'JSON'
+          cat > "$I3BAR_FIXED_FEATURES_CONFIG" <<'JSON'
           {
             "enabled": ["linux-tray-single-arg"]
           }
           JSON
 
-      - name: Build AppImage, DEB and RPM
-        run: |
-          set -euo pipefail
-
           cd codex-desktop-linux
-          bash scripts/install-deps.sh
-          make build-app
+          CODEX_LINUX_FEATURES_CONFIG="$I3BAR_FIXED_FEATURES_CONFIG" \
+          CODEX_PATCH_REPORT_JSON="$I3BAR_FIXED_PATCH_REPORT_JSON" \
+            make build-app
 
-          node scripts/ci/validate-patch-report.js "$CODEX_PATCH_REPORT_JSON" \
+          node scripts/ci/validate-patch-report.js "$I3BAR_FIXED_PATCH_REPORT_JSON" \
             --require-enabled-feature linux-tray-single-arg \
             --require-applied feature:linux-tray-single-arg:linux-tray-registration \
             --require-applied feature:linux-tray-single-arg:linux-tray-readiness
 
-          rm -rf "$RUNNER_TEMP/codex-asar-check"
-          npx --yes @electron/asar extract codex-app/resources/app.asar "$RUNNER_TEMP/codex-asar-check"
-          MAIN_BUNDLE="$(find "$RUNNER_TEMP/codex-asar-check/.vite/build" -maxdepth 1 -type f -name 'main*.js' -print -quit)"
-          test -n "$MAIN_BUNDLE"
+          rm -rf "$RUNNER_TEMP/codex-i3bar-fixed-asar"
+          npx --yes @electron/asar extract \
+            codex-app/resources/app.asar \
+            "$RUNNER_TEMP/codex-i3bar-fixed-asar"
 
-          node "$GITHUB_WORKSPACE/overlay-features/linux-tray-single-arg/test.js" "$RUNNER_TEMP/codex-asar-check"
+          node "$FIXED_FEATURE/test.js" "$RUNNER_TEMP/codex-i3bar-fixed-asar"
 
-          "$GITHUB_WORKSPACE/scripts/install-stock-electron-runtime.sh" codex-app
+          "$FIXED_ROOT/scripts/install-stock-electron-runtime.sh" codex-app
           test -f codex-app/.codex-linux/stock-electron-runtime.json
 
-          make appimage
-          make deb
-          make rpm
+          CODEX_LINUX_FEATURES_CONFIG="$I3BAR_FIXED_FEATURES_CONFIG" \
+          DIST_DIR_OVERRIDE="$I3BAR_FIXED_DIST_DIR" \
+          APPIMAGE_APPDIR_OVERRIDE="$RUNNER_TEMP/codex-i3bar-fixed.AppDir" \
+          PACKAGE_VERSION="$PACKAGE_VERSION" \
+            make appimage
 
-      - name: Build Arch Linux package
+          CODEX_LINUX_FEATURES_CONFIG="$I3BAR_FIXED_FEATURES_CONFIG" \
+          DIST_DIR_OVERRIDE="$I3BAR_FIXED_DIST_DIR" \
+          PKG_ROOT_OVERRIDE="$RUNNER_TEMP/codex-i3bar-fixed-deb-root" \
+          PACKAGE_VERSION="$PACKAGE_VERSION" \
+            make deb
+
+          CODEX_LINUX_FEATURES_CONFIG="$I3BAR_FIXED_FEATURES_CONFIG" \
+          DIST_DIR_OVERRIDE="$I3BAR_FIXED_DIST_DIR" \
+          PACKAGE_VERSION="$PACKAGE_VERSION" \
+            make rpm
+
+          mapfile -t fixed_images < <(find "$I3BAR_FIXED_DIST_DIR" -maxdepth 1 -type f -name '*.AppImage' -print)
+          test "${#fixed_images[@]}" -eq 1
+          install -m 0755 "${fixed_images[0]}" "$RELEASE_ASSETS_DIR/codex-desktop-i3bar-fixed-x86_64.AppImage"
+
+      - name: Build Arch Linux package from the i3bar Fixed variant
+        if: steps.tray_contract.outputs.mode == 'apply'
         run: |
           set -euo pipefail
 
@@ -165,12 +255,12 @@ jobs:
           rustup default stable
 
           rm -rf linux-features/linux-tray-single-arg
-          cp -a /overlay-linux-tray-single-arg linux-features/linux-tray-single-arg
+          cp -a /i3bar-fixed-feature linux-features/linux-tray-single-arg
           node --check linux-features/linux-tray-single-arg/patch.js
           node linux-features/linux-tray-single-arg/test.js
 
-          CODEX_LINUX_FEATURES_CONFIG="$PWD/linux-features/features.codex-linux.json"
-          CODEX_PATCH_REPORT_JSON="$PWD/patch-report.json"
+          CODEX_LINUX_FEATURES_CONFIG="$PWD/linux-features/features.i3bar-fixed.json"
+          CODEX_PATCH_REPORT_JSON="$PWD/reports/i3bar-fixed/patch-report.json"
           export CODEX_LINUX_FEATURES_CONFIG CODEX_PATCH_REPORT_JSON
 
           cat > "$CODEX_LINUX_FEATURES_CONFIG" <<'JSON'
@@ -190,7 +280,7 @@ jobs:
             /install-stock-electron-runtime.sh codex-app
           test -f codex-app/.codex-linux/stock-electron-runtime.json
 
-          make pacman
+          make pacman PACKAGE_VERSION="$PACKAGE_VERSION"
           find dist -maxdepth 1 -type f -name '*.pkg.tar.zst' ! -name 'codex-desktop-latest.pkg.tar.zst' -exec cp -v {} /out/ \;
           BUILDER_SCRIPT
 
@@ -200,6 +290,7 @@ jobs:
           runuser -u builder -- env \
             HOME=/home/builder \
             UPSTREAM_SHA="$UPSTREAM_SHA" \
+            PACKAGE_VERSION="$PACKAGE_VERSION" \
             APPIMAGE_EXTRACT_AND_RUN=1 \
             /tmp/build-as-builder.sh
           ARCH_SCRIPT
@@ -208,40 +299,56 @@ jobs:
 
           docker run --rm \
             -e UPSTREAM_SHA \
+            -e PACKAGE_VERSION \
             -v "$RUNNER_TEMP/build-arch-package.sh:/build-arch-package.sh:ro" \
-            -v "$GITHUB_WORKSPACE/overlay-features/linux-tray-single-arg:/overlay-linux-tray-single-arg:ro" \
-            -v "$GITHUB_WORKSPACE/scripts/install-stock-electron-runtime.sh:/install-stock-electron-runtime.sh:ro" \
+            -v "$GITHUB_WORKSPACE/variants/i3bar-fixed/overlay-features/linux-tray-single-arg:/i3bar-fixed-feature:ro" \
+            -v "$GITHUB_WORKSPACE/variants/i3bar-fixed/scripts/install-stock-electron-runtime.sh:/install-stock-electron-runtime.sh:ro" \
             -v "$GITHUB_WORKSPACE/arch-dist:/out" \
             archlinux:latest \
             /build-arch-package.sh
 
       - name: Validate release files
+        env:
+          I3BAR_FIXED_MODE: ${{ steps.tray_contract.outputs.mode }}
         run: |
           set -euo pipefail
 
-          mkdir -p release-assets
+          test -f "$RELEASE_ASSETS_DIR/codex-desktop-stock-x86_64.AppImage"
 
-          find codex-desktop-linux/dist -maxdepth 1 -type f \
-            \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) \
-            -exec cp -v {} release-assets/ \;
+          if [ "$I3BAR_FIXED_MODE" = "apply" ]; then
+            test -f "$RELEASE_ASSETS_DIR/codex-desktop-i3bar-fixed-x86_64.AppImage"
 
-          find arch-dist -maxdepth 1 -type f -name '*.pkg.tar.zst' \
-            -exec cp -v {} release-assets/ \;
+            find "$I3BAR_FIXED_DIST_DIR" -maxdepth 1 -type f \
+              \( -name '*.deb' -o -name '*.rpm' \) \
+              -exec cp -v {} "$RELEASE_ASSETS_DIR/" \;
 
-          compgen -G 'release-assets/*.AppImage' >/dev/null
-          compgen -G 'release-assets/*.deb' >/dev/null
-          compgen -G 'release-assets/*.rpm' >/dev/null
-          compgen -G 'release-assets/*.pkg.tar.zst' >/dev/null
+            find arch-dist -maxdepth 1 -type f -name '*.pkg.tar.zst' \
+              -exec cp -v {} "$RELEASE_ASSETS_DIR/" \;
 
-          sha256sum release-assets/* > release-assets/SHA256SUMS.txt
-          ls -lh release-assets
+            compgen -G "$RELEASE_ASSETS_DIR/*.deb" >/dev/null
+            compgen -G "$RELEASE_ASSETS_DIR/*.rpm" >/dev/null
+            compgen -G "$RELEASE_ASSETS_DIR/*.pkg.tar.zst" >/dev/null
+          else
+            test ! -e "$RELEASE_ASSETS_DIR/codex-desktop-i3bar-fixed-x86_64.AppImage"
+          fi
+
+          sha256sum "$RELEASE_ASSETS_DIR"/* > "$RELEASE_ASSETS_DIR/SHA256SUMS.txt"
+          ls -lh "$RELEASE_ASSETS_DIR"
 
       - name: Publish rolling latest release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          I3BAR_FIXED_MODE: ${{ steps.tray_contract.outputs.mode }}
+          I3BAR_FIXED_REASON: ${{ steps.tray_contract.outputs.reason }}
         run: |
           set -euo pipefail
+
+          if [ "$I3BAR_FIXED_MODE" = "apply" ]; then
+            FIXED_NOTE="Included: verified isolated workaround applied to the known upstream contract."
+          else
+            FIXED_NOTE="Not included: isolated workaround skipped ($I3BAR_FIXED_REASON). Use and test the Stock AppImage."
+          fi
 
           cat > release-notes.md <<EOF_NOTES
           Automated build from the public upstream repository:
@@ -250,12 +357,16 @@ jobs:
           Upstream branch: main
           Upstream commit: \`$UPSTREAM_SHA\`
 
-          Packages: AppImage, DEB, RPM, Arch Linux package, and SHA256 checksums.
-          Linux system tray: patches both current bundle locations, replaces Owl with matching stock Electron, rebuilds better-sqlite3 and node-pty for the stock Electron ABI, and verifies all five GtkStatusIcon/XEmbed symbols before packaging. Windows keeps its GUID behavior.
+          AppImage variants:
+          - \`codex-desktop-stock-x86_64.AppImage\`: byte-for-byte official \`resources/app.asar\` plus the package's Electron runtime and bundled tools, with no i3bar source overlay or runtime replacement; the outer AppImage is community-packaged.
+          - \`codex-desktop-i3bar-fixed-x86_64.AppImage\`: isolated i3bar workaround; patches both tray bundle locations, replaces Owl with matching stock Electron, rebuilds better-sqlite3 and node-pty, and verifies GtkStatusIcon/XEmbed. $FIXED_NOTE
+
+          DEB, RPM and Arch packages use the i3bar Fixed variant when that verified workaround is applicable.
+          SHA256 checksums cover every published asset.
 
           <!-- upstream-sha: $UPSTREAM_SHA -->
           EOF_NOTES
 
           TAG_NAME="latest"
           gh release delete "$TAG_NAME" -y --cleanup-tag || true
-          gh release create "$TAG_NAME" release-assets/* --title "Latest" --notes-file release-notes.md
+          gh release create "$TAG_NAME" "$RELEASE_ASSETS_DIR"/* --title "Latest" --notes-file release-notes.md
