@@ -10,8 +10,11 @@
 - 用户环境中的 i3bar system tray 本身正常，其他应用图标正常显示。
 - Codex 主窗口能够正常启动，但 **Codex 没有在 system tray 中出现图标**。
 - 根因已定位到 2026-08-12 上游 PR `#1317` 的官方 Linux 包迁移：迁移把旧工作路径中的核心 `linux-tray` 兼容补丁整体移除，改为默认保留官方 `app.asar`。
-- 当前官方 bundle 同时存在两个耦合条件：Linux `Tray` 仍收到第二个 `undefined` 参数，并且上游 tray flag 为 false 时会立即执行 `tray.destroy()`。
-- 之前的 retention-only 构建只修第二项，single-argument-only 构建只修第一项；两者都不完整，所以均未出现 StatusNotifier 图标。
+- 当前官方 bundle 同时存在两个直接的注册/销毁条件：Linux `Tray` 仍收到第二个 `undefined` 参数，并且上游 tray flag 为 false 时会立即执行 `tray.destroy()`。
+- 组合修复提交 `98ada1d` / Action `31852548909` 已同时处理这两项并成功发布，但用户实机仍无图标，证明旧工作路径还有关键生命周期逻辑没有恢复。
+- 对比最后一个迁移前提交 `4da3436f` 后确认，旧 `linux-tray` 还会把缺失的非标准 `Tray.whenReady()` / `Tray.isReady()` 当作 ready，并用模块级变量强引用原始 Electron `Tray`。这些代码在迁移时一起被删除。
+- Stock Electron 没有上述两个非标准方法；当前 bundle 的 Linux fallback 因而返回 false，托盘包装器会把正常的 Electron Tray 判成未就绪。
+- 之前的 retention-only、single-argument-only 以及 constructor+gate 组合构建都没有恢复这套 readiness/strong-reference 逻辑，所以均未出现 StatusNotifier 图标。
 - 单纯修改 `BrowserWindow` 图标、`.desktop`、`StartupWMClass`、Dock icon 都不能证明 StatusNotifier 已注册。
 - 上游已经有与此症状高度一致的历史问题：
   - `#1052`：Stock Electron tray readiness/lifetime 兼容问题。
@@ -126,6 +129,21 @@
 
 规则：**不得再单独应用 constructor-only 或 retention-only 补丁；两个条件必须在同一个原子补丁中同时验证和修改。**
 
+### 8. constructor + gate 组合修复
+
+做过：
+
+- 在同一个原子补丁中让 Linux 使用单参数 `new Tray(icon)`。
+- Linux 绕过当前 `trayEnabled=false` 的立即 `destroy()` 分支。
+- Windows GUID 与非 Linux gate 行为保持不变。
+- Action `31852548909` 成功构建并发布。
+
+最终运行结果：**用户在 i3 实机再次确认，仍然没有 system tray 图标。**
+
+新定位：该补丁只恢复了旧 `linux-tray` 的后半段。最后一个迁移前实现还包含 `whenReady` / `isReady` 的 stock-Electron fallback 和原始 `Tray` 强引用；2026-08-12 的官方 Linux 包迁移将整套 core patch 删除，但迁移审计本身记录 `linux-tray` 对官方 bundle 仍为 `applies`。
+
+规则：**不得再把 constructor + gate 两项称作“完整旧版托盘路径”；必须同时恢复 readiness fallback 与强引用。**
+
 ## 上游关键证据
 
 ### `#1100`：retention 修复存在，但仍无 tray
@@ -164,19 +182,22 @@
 
 - retention-only 构建 `31809697451`：Tray 不再被 gate 销毁，但 Linux 仍使用两参数构造；实机无图标。
 - single-argument-only 构建 `31837061805`：Linux 改为单参数构造，但 Tray 仍被 gate 销毁；实机截图再次确认无图标。
-- 两次结果与历史上游路径一致地证明：这不是 i3bar 配置、BrowserWindow 图标、desktop entry 或 AppIndicator 动态库问题，而是两个 tray 条件被拆开修复。
+- constructor + gate 组合构建 `31852548909`：两项同时修复后实机仍无图标；这排除了“只要组合这两项即可”的假设。
+- 三轮结果与迁移前源码对照证明：这不是 i3bar 配置、BrowserWindow 图标或 desktop entry 问题；迁移时被删掉的 readiness fallback 与原始 Tray 强引用同样属于可见托盘路径。
 
 Action 成功只能证明静态补丁和打包通过；最终仍以用户实机 StatusNotifier / i3bar 图标为验收。
 
 ## 下一步固定策略
 
-1. 只保留一个 `linux-tray-single-arg` feature，但其实现必须原子处理两个条件：
-   - Linux 只调用单参数 `new Tray(icon)`；
-   - Linux 不经过当前 `trayEnabled=false` 的立即销毁 gate。
+1. 只保留一个 `linux-tray-single-arg` feature，并原子恢复迁移前可见托盘所需的四项行为：
+   - 缺失 `Tray.whenReady()` 时返回 ready；
+   - 缺失 `Tray.isReady()` 时返回 ready；
+   - 用模块级强引用保留原始 Electron `Tray`；
+   - Linux 单参数构造并避免当前 gate 立即销毁。
 2. Windows 继续使用 GUID 第二参数，且非 Linux 平台的原 gate 行为保持不变。
 3. 不启用 `ui-tweaks/dockIcon`，不写用户级 `.desktop`，不修改 `BrowserWindow` 或 i3 配置。
-4. CI 必须验证：新组合 marker 恰好一个、两个旧 marker 均不存在、Dock-icon marker 不存在、旧未修 factory 不存在、最终 main bundle 可解析。
-5. 每次发布记录上游 SHA 与 patch id；用户实际 i3bar 截图仍是最终验收，在此之前不得标记“已修复”。
+4. CI 必须在最终 main bundle 中逐项验证四个新 contract、所有旧 marker 均不存在、Dock-icon marker 不存在且 bundle 可解析；任何一项漂移都直接失败，禁止发布部分补丁。
+5. 用户实际 i3bar 截图仍是最终验收，在此之前不得标记“已修复”。
 
 ## 禁止重复犯错
 
@@ -190,6 +211,6 @@ Action 成功只能证明静态补丁和打包通过；最终仍以用户实机 
 
 ## 当前状态
 
-**组合修复已完成静态设计与测试，等待新 Release 的实机验收。**
+**迁移前完整托盘兼容逻辑已重新移植并通过本地静态/运行时测试；该提交进入一次 Release 构建，仍等待用户实机验收。**
 
-最后一次用户实机验证对象是 single-argument-only 构建：AppImage 主窗口正常，i3bar system tray 中仍没有 Codex 小图标。
+最后一次用户实机验证对象是 constructor + gate 组合构建 `31852548909`：AppImage 主窗口正常，i3bar system tray 中仍没有 Codex 小图标。

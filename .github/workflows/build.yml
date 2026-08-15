@@ -85,7 +85,7 @@ jobs:
           git checkout --detach "$UPSTREAM_SHA"
           test "$(git rev-parse HEAD)" = "$UPSTREAM_SHA"
 
-      - name: Apply atomic Linux tray registration fix
+      - name: Apply complete legacy Linux tray compatibility
         run: |
           set -euo pipefail
 
@@ -236,7 +236,7 @@ jobs:
           Upstream commit: \`$UPSTREAM_SHA\`
 
           Packages: AppImage, DEB, RPM, Arch Linux package, and SHA256 checksums.
-          Linux system tray: atomically restores the two coupled conditions from the older working path: Linux calls Electron Tray with one argument and keeps that tray alive past the upstream feature gate. Windows keeps its GUID and original gate behavior. Dock-icon and desktop integration experiments remain disabled.
+          Linux system tray: restores the retired pre-migration compatibility path: stock-Electron readiness fallbacks, a strong raw Tray reference, one-argument Linux construction, and retention past the upstream feature gate. Windows keeps its GUID and original gate behavior. Dock-icon and desktop integration experiments remain disabled.
 
           <!-- upstream-sha: $UPSTREAM_SHA -->
           EOF_NOTES

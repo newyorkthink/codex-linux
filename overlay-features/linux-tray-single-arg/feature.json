@@ -1,7 +1,7 @@
 {
   "id": "linux-tray-single-arg",
-  "title": "Linux Tray Registration Compatibility",
-  "description": "Atomically restores the two coupled Linux tray conditions: a one-argument Electron Tray constructor and retention past the upstream feature gate.",
+  "title": "Complete Linux Tray Compatibility",
+  "description": "Restores the retired pre-migration Tray readiness fallbacks and strong reference, plus Linux one-argument construction and retention past the feature gate.",
   "defaultEnabled": false,
   "entrypoints": {
     "patchDescriptors": "./patch.js"
