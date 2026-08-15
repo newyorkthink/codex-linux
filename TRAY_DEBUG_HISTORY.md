@@ -9,6 +9,9 @@
 
 - 用户环境中的 i3bar system tray 本身正常，其他应用图标正常显示。
 - Codex 主窗口能够正常启动，但 **Codex 没有在 system tray 中出现图标**。
+- 2026-08-15 对最终 AppImage 的原生运行时做符号级对比后确认了根因：官方 Owl 42.3 二进制完全没有 `gtk_status_icon_new`、`gtk_status_icon_set_from_pixbuf`、`gtk_status_icon_set_tooltip_text`、`gtk_status_icon_set_visible`、`gtk_status_icon_position_menu`。
+- classic i3bar tray 使用 XEmbed；同版本标准 Electron 42.3 仍导入上述五个 GtkStatusIcon 符号。因此 Owl 无法在该 i3bar 中创建可见图标，任何只改 `app.asar` JavaScript 的补丁都无法补回缺失的原生后端。
+- 当前策略保留最新上游与当前官方 Linux 应用资源，同时恢复拆分 bundle 中缺失的两段 tray 兼容逻辑；随后把 Owl 替换为同版本标准 Electron，并按标准 Electron ABI 重编译 `better-sqlite3` 与 `node-pty`。
 - 根因已定位到 2026-08-12 上游 PR `#1317` 的官方 Linux 包迁移：迁移把旧工作路径中的核心 `linux-tray` 兼容补丁整体移除，改为默认保留官方 `app.asar`。
 - 当前官方 bundle 同时存在两个直接的注册/销毁条件：Linux `Tray` 仍收到第二个 `undefined` 参数，并且上游 tray flag 为 false 时会立即执行 `tray.destroy()`。
 - 组合修复提交 `98ada1d` / Action `31852548909` 已同时处理这两项并成功发布，但用户实机仍无图标，证明旧工作路径还有关键生命周期逻辑没有恢复。
@@ -114,7 +117,6 @@
 
 规则：以后必须以实际 D-Bus/StatusNotifier 注册证据判断，不再仅凭“可能缺某个库”猜测。
 
-
 ### 7. 单独的 Linux 单参数 Tray 构造补丁
 
 做过：
@@ -206,16 +208,11 @@ Action 成功只能证明静态补丁和打包通过；最终仍以用户实机 
 
 ## 下一步固定策略
 
-1. 只保留一个 `linux-tray-single-arg` feature，并原子恢复迁移前可见托盘所需的四项行为：
-   - 缺失 `Tray.whenReady()` 时返回 ready；
-   - 缺失 `Tray.isReady()` 时返回 ready；
-   - 用 `extracted-app:pre-webview` descriptor 修改唯一的 `window-all-closed` readiness helper bundle；
-   - 用模块级强引用保留原始 Electron `Tray`；
-   - Linux 单参数构造并避免当前 gate 立即销毁。
-2. Windows 继续使用 GUID 第二参数，且非 Linux 平台的原 gate 行为保持不变。
-3. 不启用 `ui-tweaks/dockIcon`，不写用户级 `.desktop`，不修改 `BrowserWindow` 或 i3 配置。
-4. CI 必须同时验证最终 main bundle 与 readiness helper bundle、两个 descriptor 均为 applied、所有旧 marker 均不存在、Dock-icon marker 不存在且两个 bundle 都可解析；任何一项漂移都直接失败，禁止发布部分补丁。
-5. 用户实际 i3bar 截图仍是最终验收，在此之前不得标记“已修复”。
+1. 继续跟随上游 `main` 并使用当前官方 Linux 应用资源，不回退 ChatGPT 代码。
+2. 在当前拆分 bundle 中同时应用 tray 注册补丁与 readiness/强引用补丁，缺少任一命中都禁止打包。
+3. 下载与官方包声明版本完全一致的标准 Linux Electron，并校验官方 SHA256。
+4. 为标准 Electron ABI 重编译 `better-sqlite3` 与 `node-pty`；CI 必须实际加载两个模块，并确认打包后的运行时含五个 `gtk_status_icon_*` 符号。
+5. 不启用额外 Dock-icon / `.desktop` overlay；用户实际 i3bar 截图仍是最终验收，在此之前不得标记“已修复”。
 
 ## 禁止重复犯错
 
@@ -229,6 +226,6 @@ Action 成功只能证明静态补丁和打包通过；最终仍以用户实机 
 
 ## 当前状态
 
-**当前 split-bundle 完整补丁已在官方 26.810.50856 原始完整 `app.asar` 上通过上游 patch runner、定位、修改、语法与最终 verifier 测试；新 Release 构建仍等待完成和用户实机验收。**
+**此前的 split-bundle-only 构建已被实机否定。当前改动保留完整 split-bundle overlay，并新增同版本标准 Electron 替换与原生 ABI 重编译；托盘专项 Node 测试 8/8、真实 AppImage 打包及运行时/原生模块校验均已通过，Release 构建和用户实机验收仍待完成。**
 
-最后一次用户实机验证对象是 constructor + gate 组合构建 `31852548909`：AppImage 主窗口正常，i3bar system tray 中仍没有 Codex 小图标。
+最后一次用户实机验证对象是 Owl 42.3 构建：AppImage 主窗口正常，i3bar system tray 中仍没有 ChatGPT 小图标。

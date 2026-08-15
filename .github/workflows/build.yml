@@ -14,8 +14,9 @@ on:
     paths:
       - .github/workflows/build.yml
       - overlay-features/linux-tray-single-arg/**
+      - scripts/install-stock-electron-runtime.sh
   schedule:
-    - cron: '17,47 * * * *'
+    - cron: "17,47 * * * *"
 
 permissions:
   contents: write
@@ -64,9 +65,10 @@ jobs:
     env:
       UPSTREAM_SHA: ${{ needs.check.outputs.upstream_sha }}
       APPIMAGE_EXTRACT_AND_RUN: 1
-      CODEX_ENFORCE_CRITICAL_PATCHES: 0
       CODEX_LINUX_FEATURES_CONFIG: ${{ github.workspace }}/codex-desktop-linux/linux-features/features.codex-linux.json
       CODEX_PATCH_REPORT_JSON: ${{ github.workspace }}/codex-desktop-linux/patch-report.json
+      CODEX_STOCK_ELECTRON_CACHE_DIR: /tmp/codex-stock-electron
+      NPM_CONFIG_CACHE: /tmp/codex-npm-cache
     steps:
       - name: Checkout packaging overlay
         uses: actions/checkout@v4
@@ -120,6 +122,9 @@ jobs:
           test -n "$MAIN_BUNDLE"
 
           node "$GITHUB_WORKSPACE/overlay-features/linux-tray-single-arg/test.js" "$RUNNER_TEMP/codex-asar-check"
+
+          "$GITHUB_WORKSPACE/scripts/install-stock-electron-runtime.sh" codex-app
+          test -f codex-app/.codex-linux/stock-electron-runtime.json
 
           make appimage
           make deb
@@ -177,6 +182,10 @@ jobs:
             --require-applied feature:linux-tray-single-arg:linux-tray-registration \
             --require-applied feature:linux-tray-single-arg:linux-tray-readiness
 
+          CODEX_STOCK_ELECTRON_CACHE_DIR=/tmp/stock-electron-cache \
+            /install-stock-electron-runtime.sh codex-app
+          test -f codex-app/.codex-linux/stock-electron-runtime.json
+
           make pacman
           find dist -maxdepth 1 -type f -name '*.pkg.tar.zst' ! -name 'codex-desktop-latest.pkg.tar.zst' -exec cp -v {} /out/ \;
           BUILDER_SCRIPT
@@ -188,7 +197,6 @@ jobs:
             HOME=/home/builder \
             UPSTREAM_SHA="$UPSTREAM_SHA" \
             APPIMAGE_EXTRACT_AND_RUN=1 \
-            CODEX_ENFORCE_CRITICAL_PATCHES=0 \
             /tmp/build-as-builder.sh
           ARCH_SCRIPT
 
@@ -198,6 +206,7 @@ jobs:
             -e UPSTREAM_SHA \
             -v "$RUNNER_TEMP/build-arch-package.sh:/build-arch-package.sh:ro" \
             -v "$GITHUB_WORKSPACE/overlay-features/linux-tray-single-arg:/overlay-linux-tray-single-arg:ro" \
+            -v "$GITHUB_WORKSPACE/scripts/install-stock-electron-runtime.sh:/install-stock-electron-runtime.sh:ro" \
             -v "$GITHUB_WORKSPACE/arch-dist:/out" \
             archlinux:latest \
             /build-arch-package.sh
@@ -238,7 +247,7 @@ jobs:
           Upstream commit: \`$UPSTREAM_SHA\`
 
           Packages: AppImage, DEB, RPM, Arch Linux package, and SHA256 checksums.
-          Linux system tray: patches both current bundle locations to restore stock-Electron readiness fallbacks, a strong raw Tray reference, one-argument Linux construction, and retention past the upstream feature gate. Windows keeps its GUID and original gate behavior. Dock-icon and desktop integration experiments remain disabled.
+          Linux system tray: patches both current bundle locations, replaces Owl with matching stock Electron, rebuilds better-sqlite3 and node-pty for the stock Electron ABI, and verifies all five GtkStatusIcon/XEmbed symbols before packaging. Windows keeps its GUID behavior.
 
           <!-- upstream-sha: $UPSTREAM_SHA -->
           EOF_NOTES

@@ -20,13 +20,13 @@
 
 ### 自动构建
 
-GitHub Actions 每 30 分钟检查一次上游 `main` 的最新提交。只有检测到尚未发布的新提交时才进行完整构建；同一个上游提交不会重复自动构建。也可以通过 `workflow_dispatch` 手动强制重新构建。
+GitHub Actions 每 30 分钟检查一次上游 `main`。只有检测到尚未发布的新提交时才进行完整构建，也可以通过 `workflow_dispatch` 手动强制重新构建。构建继续使用当前上游与当前官方 Linux 应用资源；打包前会把缺少 XEmbed 后端的 Owl 运行时替换为同版本标准 Electron，并为它重新编译原生模块。
 
 构建完成后会替换固定的 `latest` Release。仓库不使用 `actions/upload-artifact` 保存构建产物，最终软件包只保存在 Release 中。
 
 ### 托盘图标排查记录
 
-Linux system tray / i3bar 图标的已尝试方案、失败原因、上游证据和禁止重复事项统一记录在 [`TRAY_DEBUG_HISTORY.md`](TRAY_DEBUG_HISTORY.md)。当前构建分别修改当前的 main bundle 与 `window-all-closed` helper bundle，恢复 stock Electron 就绪回退、原始 `Tray` 强引用、Linux 单参数构造和避免立即销毁；不修改用户的 i3 配置，也不启用 Dock-icon / `.desktop` 实验。
+Linux system tray / i3bar 图标的排查证据统一记录在 [`TRAY_DEBUG_HISTORY.md`](TRAY_DEBUG_HISTORY.md)。最终定位不是 PNG：官方 Owl 42.3 二进制没有 classic i3bar 所需的 `gtk_status_icon_*` / XEmbed 后端，而同版本标准 Electron 仍包含它。CI 会同时恢复拆分 bundle 中的两段 tray 兼容逻辑、替换运行时、按新 ABI 重编译 `better-sqlite3` 与 `node-pty`，并在发布前硬性验证五个 GtkStatusIcon 符号。
 
 ### 上游与声明
 
@@ -52,13 +52,13 @@ A single rolling `latest` Release provides:
 
 ### Automation
 
-GitHub Actions checks upstream `main` every 30 minutes. A full build runs only when a new upstream commit has not yet been published, so the same upstream revision is not rebuilt automatically. `workflow_dispatch` can also force a manual rebuild.
+GitHub Actions checks upstream `main` every 30 minutes. A full build runs only when a new commit has not yet been published; `workflow_dispatch` can also force a rebuild. The build keeps the current upstream and official Linux application resources, then replaces the Owl runtime that lacks XEmbed with stock Electron of the same version and rebuilds native modules for it.
 
 After a successful build, the fixed `latest` Release is replaced. The workflow does not use `actions/upload-artifact`; final packages are stored only in the Release.
 
 ### Tray debugging history
 
-All attempted Linux system-tray fixes, failed approaches, upstream evidence, and no-repeat rules are tracked in [`TRAY_DEBUG_HISTORY.md`](TRAY_DEBUG_HISTORY.md). The current build patches both current bundle locations to restore stock-Electron readiness fallbacks, a strong raw `Tray` reference, one-argument Linux construction, and prevention of immediate destruction. It does not modify i3 or enable the Dock-icon / `.desktop` experiments.
+All Linux system-tray evidence is tracked in [`TRAY_DEBUG_HISTORY.md`](TRAY_DEBUG_HISTORY.md). The root cause is native: Owl 42.3 lacks the `gtk_status_icon_*` / XEmbed backend required by classic i3bar, while stock Electron of the same version retains it. CI restores both tray-compatibility paths in the split bundles, swaps the runtime, rebuilds `better-sqlite3` and `node-pty` for the new ABI, and requires all five GtkStatusIcon symbols before publishing.
 
 ### Upstream and disclaimer
 
