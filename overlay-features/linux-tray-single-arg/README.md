@@ -9,6 +9,8 @@ The patch applies four coupled repairs atomically:
 3. Keep a strong module-level reference to the raw Electron `Tray` object.
 4. Call `new Tray(icon)` with exactly one argument on Linux and do not immediately destroy it behind the current upstream feature gate.
 
+In the current official package, the first two fallbacks live in the imported `window-all-closed-*.js` helper chunk while construction and lifetime live in `main-*.js`. The feature therefore uses two descriptors and CI verifies both final files; targeting only the main bundle leaves the readiness failure untouched.
+
 Windows retains its GUID second argument and its original feature-gate behavior. The patch fails on any incomplete or drifted bundle contract, and the package verifier checks the final built main bundle.
 
 It does not modify i3, write user-level `.desktop` files, patch `BrowserWindow` icons, enable the optional Dock-icon feature, or add AppIndicator libraries.

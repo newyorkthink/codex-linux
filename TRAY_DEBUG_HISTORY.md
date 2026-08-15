@@ -13,7 +13,7 @@
 - 当前官方 bundle 同时存在两个直接的注册/销毁条件：Linux `Tray` 仍收到第二个 `undefined` 参数，并且上游 tray flag 为 false 时会立即执行 `tray.destroy()`。
 - 组合修复提交 `98ada1d` / Action `31852548909` 已同时处理这两项并成功发布，但用户实机仍无图标，证明旧工作路径还有关键生命周期逻辑没有恢复。
 - 对比最后一个迁移前提交 `4da3436f` 后确认，旧 `linux-tray` 还会把缺失的非标准 `Tray.whenReady()` / `Tray.isReady()` 当作 ready，并用模块级变量强引用原始 Electron `Tray`。这些代码在迁移时一起被删除。
-- Stock Electron 没有上述两个非标准方法；当前 bundle 的 Linux fallback 因而返回 false，托盘包装器会把正常的 Electron Tray 判成未就绪。
+- Stock Electron 没有上述两个非标准方法；当前 main bundle 的 `qTe.waitForReady()` / `qTe.isReady()` 会调用导入的 `r.W` / `r.S`，而真正的 Linux false fallback 位于 `.vite/build/window-all-closed-*.js`，不是 main bundle。托盘包装器因此把正常的 Electron Tray 判成未就绪。
 - 之前的 retention-only、single-argument-only 以及 constructor+gate 组合构建都没有恢复这套 readiness/strong-reference 逻辑，所以均未出现 StatusNotifier 图标。
 - 单纯修改 `BrowserWindow` 图标、`.desktop`、`StartupWMClass`、Dock icon 都不能证明 StatusNotifier 已注册。
 - 上游已经有与此症状高度一致的历史问题：
@@ -144,6 +144,23 @@
 
 规则：**不得再把 constructor + gate 两项称作“完整旧版托盘路径”；必须同时恢复 readiness fallback 与强引用。**
 
+### 9. 完整逻辑第一次移植到错误的 bundle
+
+做过：
+
+- 提交 `f2640c4` 增加 readiness fallback、强引用、单参数构造和 gate 保留。
+- 本地合成 fixture 测试通过后触发 Action `31854124586`。
+
+结果：**Action 在真实官方包的 patch 阶段失败，没有发布软件包。**
+
+失败日志：`Expected exactly one current Linux Tray.whenReady fallback, found 0`。
+
+精确原因：当前 main bundle 只包含 `qTe.waitForReady(){return r.W(this.tray)}` 与 `qTe.isReady(){return r.S(this.tray)}`；`r.W` / `r.S` 的实现已拆到导入的 `window-all-closed-*.js`。第一次移植仍按迁移前单 bundle 布局只扫描 main，因此找不到 readiness contract。
+
+修正：feature 现在使用两个 descriptor：`main-bundle` 修改构造与生命周期，`extracted-app:pre-webview` 唯一定位并修改 readiness helper chunk。已下载并校验官方 `chatgpt_26.810.50856_amd64.deb`（SHA256 `e3b47c1298e01e4a2aa54f120eb169834c6911bd295122bc43e5cd1642c1a4ba`），在其原始完整 `app.asar` 上通过上游 patch runner、两个真实 bundle 的语法和最终 verifier 测试。
+
+规则：**readiness fallback 必须在 helper chunk 中验证；不得再假定所有 tray 代码都在 main bundle。**
+
 ## 上游关键证据
 
 ### `#1100`：retention 修复存在，但仍无 tray
@@ -192,11 +209,12 @@ Action 成功只能证明静态补丁和打包通过；最终仍以用户实机 
 1. 只保留一个 `linux-tray-single-arg` feature，并原子恢复迁移前可见托盘所需的四项行为：
    - 缺失 `Tray.whenReady()` 时返回 ready；
    - 缺失 `Tray.isReady()` 时返回 ready；
+   - 用 `extracted-app:pre-webview` descriptor 修改唯一的 `window-all-closed` readiness helper bundle；
    - 用模块级强引用保留原始 Electron `Tray`；
    - Linux 单参数构造并避免当前 gate 立即销毁。
 2. Windows 继续使用 GUID 第二参数，且非 Linux 平台的原 gate 行为保持不变。
 3. 不启用 `ui-tweaks/dockIcon`，不写用户级 `.desktop`，不修改 `BrowserWindow` 或 i3 配置。
-4. CI 必须在最终 main bundle 中逐项验证四个新 contract、所有旧 marker 均不存在、Dock-icon marker 不存在且 bundle 可解析；任何一项漂移都直接失败，禁止发布部分补丁。
+4. CI 必须同时验证最终 main bundle 与 readiness helper bundle、两个 descriptor 均为 applied、所有旧 marker 均不存在、Dock-icon marker 不存在且两个 bundle 都可解析；任何一项漂移都直接失败，禁止发布部分补丁。
 5. 用户实际 i3bar 截图仍是最终验收，在此之前不得标记“已修复”。
 
 ## 禁止重复犯错
@@ -211,6 +229,6 @@ Action 成功只能证明静态补丁和打包通过；最终仍以用户实机 
 
 ## 当前状态
 
-**迁移前完整托盘兼容逻辑已重新移植并通过本地静态/运行时测试；该提交进入一次 Release 构建，仍等待用户实机验收。**
+**当前 split-bundle 完整补丁已在官方 26.810.50856 原始完整 `app.asar` 上通过上游 patch runner、定位、修改、语法与最终 verifier 测试；新 Release 构建仍等待完成和用户实机验收。**
 
 最后一次用户实机验证对象是 constructor + gate 组合构建 `31852548909`：AppImage 主窗口正常，i3bar system tray 中仍没有 Codex 小图标。

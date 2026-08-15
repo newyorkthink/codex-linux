@@ -111,14 +111,15 @@ jobs:
 
           node scripts/ci/validate-patch-report.js "$CODEX_PATCH_REPORT_JSON" \
             --require-enabled-feature linux-tray-single-arg \
-            --require-applied feature:linux-tray-single-arg:linux-tray-registration
+            --require-applied feature:linux-tray-single-arg:linux-tray-registration \
+            --require-applied feature:linux-tray-single-arg:linux-tray-readiness
 
           rm -rf "$RUNNER_TEMP/codex-asar-check"
           npx --yes @electron/asar extract codex-app/resources/app.asar "$RUNNER_TEMP/codex-asar-check"
           MAIN_BUNDLE="$(find "$RUNNER_TEMP/codex-asar-check/.vite/build" -maxdepth 1 -type f -name 'main*.js' -print -quit)"
           test -n "$MAIN_BUNDLE"
 
-          node "$GITHUB_WORKSPACE/overlay-features/linux-tray-single-arg/test.js" "$MAIN_BUNDLE"
+          node "$GITHUB_WORKSPACE/overlay-features/linux-tray-single-arg/test.js" "$RUNNER_TEMP/codex-asar-check"
 
           make appimage
           make deb
@@ -173,7 +174,8 @@ jobs:
 
           node scripts/ci/validate-patch-report.js "$CODEX_PATCH_REPORT_JSON" \
             --require-enabled-feature linux-tray-single-arg \
-            --require-applied feature:linux-tray-single-arg:linux-tray-registration
+            --require-applied feature:linux-tray-single-arg:linux-tray-registration \
+            --require-applied feature:linux-tray-single-arg:linux-tray-readiness
 
           make pacman
           find dist -maxdepth 1 -type f -name '*.pkg.tar.zst' ! -name 'codex-desktop-latest.pkg.tar.zst' -exec cp -v {} /out/ \;
@@ -236,7 +238,7 @@ jobs:
           Upstream commit: \`$UPSTREAM_SHA\`
 
           Packages: AppImage, DEB, RPM, Arch Linux package, and SHA256 checksums.
-          Linux system tray: restores the retired pre-migration compatibility path: stock-Electron readiness fallbacks, a strong raw Tray reference, one-argument Linux construction, and retention past the upstream feature gate. Windows keeps its GUID and original gate behavior. Dock-icon and desktop integration experiments remain disabled.
+          Linux system tray: patches both current bundle locations to restore stock-Electron readiness fallbacks, a strong raw Tray reference, one-argument Linux construction, and retention past the upstream feature gate. Windows keeps its GUID and original gate behavior. Dock-icon and desktop integration experiments remain disabled.
 
           <!-- upstream-sha: $UPSTREAM_SHA -->
           EOF_NOTES

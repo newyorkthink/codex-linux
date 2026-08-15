@@ -1,7 +1,7 @@
 {
   "id": "linux-tray-single-arg",
   "title": "Complete Linux Tray Compatibility",
-  "description": "Restores the retired pre-migration Tray readiness fallbacks and strong reference, plus Linux one-argument construction and retention past the feature gate.",
+  "description": "Patches both current bundle locations to restore stock-Electron Tray readiness fallbacks, a strong reference, Linux one-argument construction, and retention past the feature gate.",
   "defaultEnabled": false,
   "entrypoints": {
     "patchDescriptors": "./patch.js"
