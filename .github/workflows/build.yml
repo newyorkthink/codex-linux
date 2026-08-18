@@ -91,6 +91,35 @@ jobs:
           git checkout --detach "$UPSTREAM_SHA"
           test "$(git rev-parse HEAD)" = "$UPSTREAM_SHA"
 
+      - name: Isolate AppImage Codex home from host Codex CLI
+        run: |
+          set -euo pipefail
+
+          cd codex-desktop-linux
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("packaging/appimage/AppRun")
+          source = path.read_text(encoding="utf-8")
+          anchor = 'exec "$APPDIR/opt/__PACKAGE_NAME__/start.sh" "$@"\n'
+          if source.count(anchor) != 1:
+              raise SystemExit("expected exactly one AppImage launcher exec anchor")
+
+          isolation = '''# ChatGPT Desktop AppImage 使用独立的 CODEX_HOME，避免与主机 Codex CLI 的 ~/.codex 共用配置、认证和本地状态
+          CHATGPT_DESKTOP_CODEX_HOME="${CHATGPT_DESKTOP_CODEX_HOME:-$HOME/.codex-chatgpt-desktop}"
+          mkdir -p -- "$CHATGPT_DESKTOP_CODEX_HOME"
+          export CODEX_HOME="$CHATGPT_DESKTOP_CODEX_HOME"
+
+          '''
+          path.write_text(source.replace(anchor, isolation + anchor), encoding="utf-8")
+          PY
+
+          bash -n packaging/appimage/AppRun
+          test "$(grep -Fxc 'CHATGPT_DESKTOP_CODEX_HOME="${CHATGPT_DESKTOP_CODEX_HOME:-$HOME/.codex-chatgpt-desktop}"' packaging/appimage/AppRun)" -eq 1
+          test "$(grep -Fxc 'mkdir -p -- "$CHATGPT_DESKTOP_CODEX_HOME"' packaging/appimage/AppRun)" -eq 1
+          test "$(grep -Fxc 'export CODEX_HOME="$CHATGPT_DESKTOP_CODEX_HOME"' packaging/appimage/AppRun)" -eq 1
+
       - name: Build Stock AppImage from unmodified official resources
         run: |
           set -euo pipefail
@@ -133,6 +162,9 @@ jobs:
           APPIMAGE_APPDIR_OVERRIDE="$RUNNER_TEMP/codex-stock.AppDir" \
           PACKAGE_VERSION="$PACKAGE_VERSION" \
             make appimage
+
+          bash -n "$RUNNER_TEMP/codex-stock.AppDir/AppRun"
+          test "$(grep -Fxc 'export CODEX_HOME="$CHATGPT_DESKTOP_CODEX_HOME"' "$RUNNER_TEMP/codex-stock.AppDir/AppRun")" -eq 1
 
           mapfile -t stock_images < <(find "$STOCK_DIST_DIR" -maxdepth 1 -type f -name '*.AppImage' -print)
           test "${#stock_images[@]}" -eq 1
@@ -203,6 +235,9 @@ jobs:
           APPIMAGE_APPDIR_OVERRIDE="$RUNNER_TEMP/codex-i3bar-fixed.AppDir" \
           PACKAGE_VERSION="$PACKAGE_VERSION" \
             make appimage
+
+          bash -n "$RUNNER_TEMP/codex-i3bar-fixed.AppDir/AppRun"
+          test "$(grep -Fxc 'export CODEX_HOME="$CHATGPT_DESKTOP_CODEX_HOME"' "$RUNNER_TEMP/codex-i3bar-fixed.AppDir/AppRun")" -eq 1
 
           CODEX_LINUX_FEATURES_CONFIG="$I3BAR_FIXED_FEATURES_CONFIG" \
           DIST_DIR_OVERRIDE="$I3BAR_FIXED_DIST_DIR" \
@@ -361,7 +396,11 @@ jobs:
           - \`codex-desktop-stock-x86_64.AppImage\`: byte-for-byte official \`resources/app.asar\` plus the package's Electron runtime and bundled tools, with no i3bar source overlay or runtime replacement; the outer AppImage is community-packaged.
           - \`codex-desktop-i3bar-fixed-x86_64.AppImage\`: isolated i3bar workaround; patches both tray bundle locations, replaces Owl with matching stock Electron, rebuilds better-sqlite3 and node-pty, and verifies GtkStatusIcon/XEmbed. $FIXED_NOTE
 
-          DEB, RPM and Arch packages use the i3bar Fixed variant when that verified workaround is applicable.
+          AppImage configuration:
+          - Both AppImage variants use an isolated \`CODEX_HOME=\$HOME/.codex-chatgpt-desktop\` so ChatGPT Desktop does not share the host Codex CLI's \`~/.codex\` configuration and local state.
+          - Set \`CHATGPT_DESKTOP_CODEX_HOME=/path/to/directory\` only when a different Desktop-only location is intentionally required.
+
+          DEB, RPM and Arch packages use the i3bar Fixed variant when that verified workaround is applicable. Their upstream native \`CODEX_HOME\` behavior is unchanged.
           SHA256 checksums cover every published asset.
 
           <!-- upstream-sha: $UPSTREAM_SHA -->

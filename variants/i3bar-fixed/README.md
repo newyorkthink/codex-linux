@@ -16,9 +16,15 @@
 - `scripts/install-stock-electron-runtime.sh`：仅在构建目录内替换运行时和两个原生模块。
 - `detect-upstream-contract.js`：在构建修复版前判断当前上游是否仍符合已验证合同。
 
+## AppImage 配置隔离边界
+
+根目录工作流会同时为 Stock 和 i3bar Fixed 两个 AppImage 的外层 `AppRun` 设置独立 `CODEX_HOME`，默认使用 `~/.codex-chatgpt-desktop`，用于避免 ChatGPT Desktop 与主机 Codex CLI 的 `~/.codex` 共用 provider、MCP、认证和其他本地状态。该配置属于两个 AppImage 共用的外层启动逻辑，不属于本目录的托盘修复，也不会写入 `resources/app.asar`。
+
+因此 i3bar Fixed 的托盘稳定基线仍只由本目录现有 split-bundle overlay、同版本标准 Electron 和原生模块 ABI 重编译组成；不得把 `CODEX_HOME` 隔离混入托盘补丁本体。`.deb`、`.rpm` 和 Arch 原生包不使用 AppImage `AppRun`，保持上游原生 `CODEX_HOME` 行为。
+
 ## 与主机系统的边界
 
-这些脚本只在 GitHub Actions 的临时构建目录中执行。修复版 AppImage 不安装或替换主机 Electron，不修改 `/usr`、`/etc`、i3 配置或 `~/.local/share/applications`，也不新增系统服务和开机启动项。应用运行时仍会产生 ChatGPT/Codex 正常的用户配置、状态和缓存。
+这些脚本只在 GitHub Actions 的临时构建目录中执行。修复版 AppImage 不安装或替换主机 Electron，不修改 `/usr`、`/etc`、i3 配置或 `~/.local/share/applications`，也不新增系统服务和开机启动项。应用运行时仍会产生 ChatGPT/Codex 正常的用户配置、状态和缓存；本仓库 AppImage 的 Codex 配置和本地状态默认位于 `~/.codex-chatgpt-desktop`，主机 Codex CLI 的 `~/.codex` 保持不变。
 
 ## 上游更新保护
 
