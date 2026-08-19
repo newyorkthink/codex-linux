@@ -1,7 +1,7 @@
 "use strict";
 
 const APP_PAGE_ASSET_PATTERN = /^app-initial-[A-Za-z0-9_-]+\.js$/;
-const RUNTIME_MARKER = "__codexLinuxDefaultHighReasoningRuntimeV2";
+const RUNTIME_MARKER = "__codexLinuxDefaultHighReasoningRuntimeV3";
 const APP_PAGE_MARKERS = [
   "group/folder-row",
   "className:`text-fade-truncate pe-1`",
@@ -24,7 +24,7 @@ function installRuntime() {
 
   if (typeof window === "undefined" || typeof document === "undefined") return;
 
-  const GLOBAL_KEY = "__codexLinuxDefaultHighReasoningRuntimeV2";
+  const GLOBAL_KEY = "__codexLinuxDefaultHighReasoningRuntimeV3";
   if (window[GLOBAL_KEY]) return;
   window[GLOBAL_KEY] = true;
 
@@ -38,13 +38,15 @@ function installRuntime() {
     "开始新聊天",
     "开始新对话",
   ];
-  const TRIGGER_LABELS = new Set(["极速", "fast", "中", "medium", "高", "high"]);
-  const HIGH_LABELS = new Set(["高", "high"]);
-  const REASONING_LABELS = ["推理强度", "reasoning effort", "reasoning"];
+  const TRIGGER_TOKENS = new Set(["极速", "fast", "中", "medium", "高", "high"]);
+  const HIGH_TOKENS = new Set(["高", "high"]);
+  const REASONING_TOKENS = ["推理强度", "reasoning effort", "reasoning"];
 
   let generation = 0;
   let handledGeneration = -1;
-  let timer = null;
+  let startTimer = null;
+  let runningGeneration = -1;
+  let cycleCount = 0;
 
   function normalize(value) {
     return String(value ?? "").replace(/\s+/g, " ").trim().toLocaleLowerCase();
@@ -66,6 +68,20 @@ function installRuntime() {
       .filter(Boolean);
   }
 
+  function textParts(element) {
+    if (!(element instanceof Element)) return [];
+    const parts = new Set(labelsFor(element));
+    for (const node of element.querySelectorAll("span,div,p")) {
+      const text = normalize(node.textContent);
+      if (text && text.length <= 48) parts.add(text);
+    }
+    return [...parts];
+  }
+
+  function containsToken(element, tokens) {
+    return textParts(element).some((part) => tokens.has(part));
+  }
+
   function isNewChatControl(element) {
     return labelsFor(element).some((label) =>
       NEW_CHAT_LABELS.some((candidate) => label === candidate || label.startsWith(`${candidate} `)),
@@ -76,130 +92,186 @@ function installRuntime() {
     const candidates = [];
     for (const element of document.querySelectorAll("button,[role='button']")) {
       if (!(element instanceof HTMLElement) || !visible(element)) continue;
-      const labels = labelsFor(element);
-      if (!labels.some((label) => TRIGGER_LABELS.has(label))) continue;
+      if (!containsToken(element, TRIGGER_TOKENS)) continue;
+
       const rect = element.getBoundingClientRect();
-      if (rect.bottom < innerHeight - 190 || rect.top < innerHeight * 0.58) continue;
-      if (rect.width > 320 || rect.height > 72) continue;
-      candidates.push({ element, rect });
+      if (rect.top < innerHeight * 0.32 || rect.left < innerWidth * 0.42) continue;
+      if (rect.width > 360 || rect.height > 76) continue;
+
+      const centerBias = Math.abs(rect.top + rect.height / 2 - innerHeight * 0.67);
+      candidates.push({ element, rect, score: centerBias - rect.right / 1000 });
     }
-    candidates.sort((a, b) => b.rect.bottom - a.rect.bottom || b.rect.right - a.rect.right);
+    candidates.sort((a, b) => a.score - b.score || b.rect.right - a.rect.right);
     return candidates[0]?.element ?? null;
   }
 
-  function findReasoningRow() {
+  function isHighTrigger(trigger) {
+    return trigger instanceof HTMLElement && containsToken(trigger, HIGH_TOKENS);
+  }
+
+  function findReasoningRow(trigger) {
+    const triggerRect = trigger instanceof HTMLElement ? trigger.getBoundingClientRect() : null;
     const candidates = [];
-    for (const element of document.querySelectorAll("[role='menuitem'],[role='button'],button,[data-radix-collection-item]")) {
-      if (!(element instanceof HTMLElement) || !visible(element)) continue;
-      const labels = labelsFor(element);
-      if (!labels.some((label) => REASONING_LABELS.some((needle) => label === needle || label.startsWith(`${needle} `)))) continue;
+
+    for (const element of document.querySelectorAll("[role='menuitem'],[role='menuitemradio'],[role='option'],[role='button'],button,[data-radix-collection-item]")) {
+      if (!(element instanceof HTMLElement) || !visible(element) || element === trigger) continue;
+      const parts = textParts(element);
+      if (!parts.some((part) => REASONING_TOKENS.some((token) => part === token || part.startsWith(`${token} `) || part.includes(token)))) continue;
+
       const rect = element.getBoundingClientRect();
-      if (rect.width > 520 || rect.height > 84) continue;
-      candidates.push({ element, rect });
+      if (rect.width > 560 || rect.height > 96) continue;
+      let distance = 0;
+      if (triggerRect) {
+        const dx = rect.right < triggerRect.left ? triggerRect.left - rect.right : rect.left > triggerRect.right ? rect.left - triggerRect.right : 0;
+        const dy = rect.bottom < triggerRect.top ? triggerRect.top - rect.bottom : rect.top > triggerRect.bottom ? rect.top - triggerRect.bottom : 0;
+        if (dx > 520 || dy > 560) continue;
+        distance = dx + dy;
+      }
+      candidates.push({ element, distance, rect });
     }
-    candidates.sort((a, b) => b.rect.bottom - a.rect.bottom || b.rect.right - a.rect.right);
+
+    candidates.sort((a, b) => a.distance - b.distance || b.rect.bottom - a.rect.bottom);
     return candidates[0]?.element ?? null;
   }
 
   function findHighOption(anchor) {
     const anchorRect = anchor instanceof HTMLElement ? anchor.getBoundingClientRect() : null;
     const candidates = [];
+
     for (const element of document.querySelectorAll("[role='menuitem'],[role='menuitemradio'],[role='option'],button,[data-radix-collection-item]")) {
-      if (!(element instanceof HTMLElement) || !visible(element)) continue;
-      const labels = labelsFor(element);
-      if (!labels.some((label) => HIGH_LABELS.has(label))) continue;
+      if (!(element instanceof HTMLElement) || !visible(element) || element === anchor) continue;
+      if (!containsToken(element, HIGH_TOKENS)) continue;
+
       const rect = element.getBoundingClientRect();
-      if (rect.width > 360 || rect.height > 72) continue;
+      if (rect.width > 380 || rect.height > 80) continue;
       let distance = 0;
       if (anchorRect) {
         const dx = rect.right < anchorRect.left ? anchorRect.left - rect.right : rect.left > anchorRect.right ? rect.left - anchorRect.right : 0;
         const dy = rect.bottom < anchorRect.top ? anchorRect.top - rect.bottom : rect.top > anchorRect.bottom ? rect.top - anchorRect.bottom : 0;
-        if (dx > 480 || dy > 520) continue;
+        if (dx > 520 || dy > 560) continue;
         distance = dx + dy;
       }
       candidates.push({ element, distance, rect });
     }
+
     candidates.sort((a, b) => a.distance - b.distance || b.rect.bottom - a.rect.bottom);
     return candidates[0]?.element ?? null;
   }
 
-  function currentTriggerIsHigh(trigger) {
-    return labelsFor(trigger).some((label) => HIGH_LABELS.has(label));
+  function waitFor(targetGeneration, finder, tries, delay, done) {
+    if (targetGeneration !== generation || handledGeneration === generation) return;
+    const value = finder();
+    if (value) {
+      done(value);
+      return;
+    }
+    if (tries <= 0) {
+      retryCycle(targetGeneration);
+      return;
+    }
+    setTimeout(() => waitFor(targetGeneration, finder, tries - 1, delay, done), delay);
   }
 
-  function trySetHigh(targetGeneration, attemptIndex) {
+  function retryCycle(targetGeneration) {
     if (targetGeneration !== generation || handledGeneration === generation) return;
+    if (runningGeneration !== targetGeneration) return;
+    setTimeout(() => runCycle(targetGeneration), 260);
+  }
+
+  function runCycle(targetGeneration) {
+    if (targetGeneration !== generation || handledGeneration === generation) return;
+    if (cycleCount >= 12) {
+      runningGeneration = -1;
+      return;
+    }
+    cycleCount += 1;
+    runningGeneration = targetGeneration;
 
     const trigger = findComposerTrigger();
     if (!trigger) {
-      if (attemptIndex < 18) setTimeout(() => trySetHigh(targetGeneration, attemptIndex + 1), 220);
+      retryCycle(targetGeneration);
       return;
     }
 
-    if (currentTriggerIsHigh(trigger)) {
+    if (isHighTrigger(trigger)) {
       handledGeneration = generation;
+      runningGeneration = -1;
       return;
     }
 
     trigger.click();
 
-    setTimeout(() => {
-      if (targetGeneration !== generation || handledGeneration === generation) return;
-
-      const reasoningRow = findReasoningRow();
-      if (reasoningRow) {
-        reasoningRow.click();
+    waitFor(targetGeneration, () => findReasoningRow(trigger), 14, 90, (reasoningRow) => {
+      reasoningRow.click();
+      waitFor(targetGeneration, () => findHighOption(reasoningRow), 14, 90, (high) => {
+        high.click();
         setTimeout(() => {
-          if (targetGeneration !== generation || handledGeneration === generation) return;
-          const high = findHighOption(reasoningRow);
-          if (high) {
-            high.click();
+          if (targetGeneration !== generation) return;
+          const current = findComposerTrigger();
+          if (current && isHighTrigger(current)) {
             handledGeneration = generation;
+            runningGeneration = -1;
             return;
           }
-          if (attemptIndex < 18) setTimeout(() => trySetHigh(targetGeneration, attemptIndex + 1), 220);
-        }, 100);
-        return;
-      }
-
-      const directHigh = findHighOption(trigger);
-      if (directHigh) {
-        directHigh.click();
-        handledGeneration = generation;
-        return;
-      }
-
-      if (attemptIndex < 18) setTimeout(() => trySetHigh(targetGeneration, attemptIndex + 1), 220);
-    }, 110);
+          retryCycle(targetGeneration);
+        }, 220);
+      });
+    });
   }
 
-  function beginNewChat(delay = 320) {
+  function beginNewChat(delay = 180) {
     generation += 1;
     handledGeneration = -1;
-    if (timer != null) clearTimeout(timer);
+    runningGeneration = -1;
+    cycleCount = 0;
+    if (startTimer != null) clearTimeout(startTimer);
     const targetGeneration = generation;
-    timer = setTimeout(() => {
-      timer = null;
-      trySetHigh(targetGeneration, 0);
+    startTimer = setTimeout(() => {
+      startTimer = null;
+      runCycle(targetGeneration);
     }, delay);
   }
 
-  function likelyBlankChat() {
-    const message = document.querySelector("[data-message-author-role='user'],[data-message-author-role='assistant'],article[data-testid*='conversation']");
-    if (message) return false;
-    return findComposerTrigger() instanceof HTMLElement;
+  function blankChatSurface() {
+    const trigger = findComposerTrigger();
+    if (!(trigger instanceof HTMLElement)) return false;
+    const rect = trigger.getBoundingClientRect();
+    if (rect.top < innerHeight * 0.32 || rect.top > innerHeight * 0.8) return false;
+
+    const message = document.querySelector(
+      "[data-message-author-role='user'],[data-message-author-role='assistant'],article[data-testid*='conversation']",
+    );
+    return !message;
+  }
+
+  function ensureBlankChatHigh() {
+    if (!blankChatSurface()) return;
+    const trigger = findComposerTrigger();
+    if (trigger && isHighTrigger(trigger)) return;
+    if (runningGeneration === generation || startTimer != null) return;
+    beginNewChat(80);
   }
 
   function start() {
     document.addEventListener("click", (event) => {
       if (!(event.target instanceof Element)) return;
       const clickable = event.target.closest("a[href],button,[role='button']");
-      if (clickable && isNewChatControl(clickable)) beginNewChat(360);
+      if (clickable && isNewChatControl(clickable)) beginNewChat(180);
     }, true);
 
-    setTimeout(() => {
-      if (likelyBlankChat()) beginNewChat(120);
-    }, 900);
+    const observer = new MutationObserver(() => {
+      setTimeout(ensureBlankChatHigh, 80);
+    });
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["aria-label", "title", "class", "data-state", "aria-expanded"],
+    });
+
+    setTimeout(ensureBlankChatHigh, 350);
+    setTimeout(ensureBlankChatHigh, 900);
+    setTimeout(ensureBlankChatHigh, 1800);
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start, { once: true });
