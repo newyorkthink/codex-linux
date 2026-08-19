@@ -3,11 +3,87 @@
 # 遇到脚本错误或未定义变量时立即退出，避免继续执行不完整的外链启动
 set -eu
 
-# AppRun 只在 PATH 最前方加入本包装器目录；调用宿主 xdg-open 前恢复原 PATH，避免浏览器继承 AppImage 挂载路径
+# AppRun 只在 PATH 最前方加入本包装器目录；调用宿主程序前恢复原 PATH，避免浏览器继承 AppImage 挂载路径
 case "${PATH:-}" in
     *:*) PATH=${PATH#*:} ;;
 esac
 export PATH
 
-# 清理当前 ChatGPT/Codex AppImage 的运行时变量后调用宿主 xdg-open，避免冷启动浏览器继承错误的 AppImage 环境
+# 统一清理 ChatGPT/Codex AppImage 运行时变量后执行宿主命令
+host_env() {
+    /usr/bin/env -u APPIMAGE -u APPDIR -u ARGV0 -u OWD -u LD_LIBRARY_PATH -u LD_PRELOAD "$@"
+}
+
+# 判断默认浏览器是否已经有真实桌面窗口；i3 环境优先看窗口树，避免残留 AppImage 进程被误判为浏览器仍在运行
+browser_window_running() {
+    if [ -z "${browser_hint:-}" ]; then
+        return 1
+    fi
+
+    if [ -n "${i3_msg_bin:-}" ]; then
+        if tree="$(host_env "$i3_msg_bin" -t get_tree 2>/dev/null)"; then
+            printf '%s\n' "$tree" | /usr/bin/grep -Fiq -- "$browser_hint"
+            return $?
+        fi
+    fi
+
+    if [ -n "${wmctrl_bin:-}" ]; then
+        if windows="$(host_env "$wmctrl_bin" -lx 2>/dev/null)"; then
+            printf '%s\n' "$windows" | /usr/bin/grep -Fiq -- "$browser_hint"
+            return $?
+        fi
+    fi
+
+    if [ -n "${pgrep_bin:-}" ]; then
+        host_env "$pgrep_bin" -fi -- "$browser_hint" >/dev/null 2>&1
+        return $?
+    fi
+
+    return 1
+}
+
+# 冷启动 HTTP/HTTPS 外链时，先无 URL 启动默认浏览器，再在浏览器窗口出现后交给 xdg-open 打开目标 URL
+# 这样避免浏览器 AppImage 在“首次启动并同时接收 URL”这一条路径中产生异常挂载/残留进程链
+case "${1:-}" in
+    http://*|https://*)
+        xdg_mime_bin="$(command -v xdg-mime 2>/dev/null || true)"
+        xdg_settings_bin="$(command -v xdg-settings 2>/dev/null || true)"
+        gtk_launch_bin="$(command -v gtk-launch 2>/dev/null || true)"
+        i3_msg_bin="$(command -v i3-msg 2>/dev/null || true)"
+        wmctrl_bin="$(command -v wmctrl 2>/dev/null || true)"
+        pgrep_bin="$(command -v pgrep 2>/dev/null || true)"
+        setsid_bin="$(command -v setsid 2>/dev/null || true)"
+        sleep_bin="$(command -v sleep 2>/dev/null || true)"
+
+        desktop_id=""
+        if [ -n "$xdg_mime_bin" ]; then
+            desktop_id="$(host_env "$xdg_mime_bin" query default x-scheme-handler/https 2>/dev/null || true)"
+        fi
+        if [ -z "$desktop_id" ] && [ -n "$xdg_settings_bin" ]; then
+            desktop_id="$(host_env "$xdg_settings_bin" get default-web-browser 2>/dev/null || true)"
+        fi
+
+        browser_hint=${desktop_id%.desktop}
+        browser_hint=${browser_hint##*.}
+
+        if [ -n "$desktop_id" ] && [ -n "$browser_hint" ] && [ -n "$gtk_launch_bin" ] && ! browser_window_running; then
+            if [ -n "$setsid_bin" ]; then
+                host_env "$setsid_bin" -f "$gtk_launch_bin" "$desktop_id" >/dev/null 2>&1 || true
+            else
+                host_env "$gtk_launch_bin" "$desktop_id" >/dev/null 2>&1 &
+            fi
+
+            if [ -n "$sleep_bin" ]; then
+                wait_count=0
+                while [ "$wait_count" -lt 50 ]; do
+                    browser_window_running && break
+                    host_env "$sleep_bin" 0.1
+                    wait_count=$((wait_count + 1))
+                done
+            fi
+        fi
+        ;;
+esac
+
+# 浏览器已运行后再打开目标 URL；同时继续清理 AppImage 环境变量，避免宿主程序继承 ChatGPT AppImage 运行时环境
 exec /usr/bin/env -u APPIMAGE -u APPDIR -u ARGV0 -u OWD -u LD_LIBRARY_PATH -u LD_PRELOAD /usr/bin/xdg-open "$@"

@@ -1,7 +1,7 @@
 "use strict";
 
 const APP_PAGE_ASSET_PATTERN = /^app-initial-[A-Za-z0-9_-]+\.js$/;
-const RUNTIME_MARKER = "__codexLinuxImagePreviewCloseSafeRuntimeV1";
+const RUNTIME_MARKER = "__codexLinuxImagePreviewCloseSafeRuntimeV2";
 const APP_PAGE_MARKERS = [
   "group/folder-row",
   "className:`text-fade-truncate pe-1`",
@@ -26,11 +26,13 @@ function installRuntime() {
 
   if (typeof window === "undefined" || typeof document === "undefined") return;
 
-  const GLOBAL_KEY = "__codexLinuxImagePreviewCloseSafeRuntimeV1";
+  const GLOBAL_KEY = "__codexLinuxImagePreviewCloseSafeRuntimeV2";
   if (window[GLOBAL_KEY]) return;
   window[GLOBAL_KEY] = true;
 
-  const MARKER = "codexLinuxImagePreviewCloseSafe";
+  const PROXY_ID = "codex-linux-image-preview-close-proxy";
+  const STYLE_ID = "codex-linux-image-preview-close-style";
+  const MOVED_MARKER = "codexLinuxImagePreviewCloseMoved";
   let scanTimer = null;
 
   function normalize(value) {
@@ -48,8 +50,69 @@ function installRuntime() {
     return style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
   }
 
-  function isCloseControl(element) {
-    if (!(element instanceof HTMLElement) || !visible(element)) return false;
+  function rectArea(rect) {
+    return Math.max(0, rect.width) * Math.max(0, rect.height);
+  }
+
+  function hasPreviewMedia(root) {
+    if (!(root instanceof Element)) return false;
+    const viewportArea = Math.max(1, window.innerWidth * window.innerHeight);
+
+    for (const media of root.querySelectorAll("img,canvas,video,picture")) {
+      if (!(media instanceof HTMLElement) || !visible(media)) continue;
+      const rect = media.getBoundingClientRect();
+      if (rect.width >= 280 && rect.height >= 180 && rectArea(rect) >= viewportArea * 0.08) return true;
+    }
+
+    for (const element of root.querySelectorAll("div,figure")) {
+      if (!(element instanceof HTMLElement) || !visible(element)) continue;
+      const rect = element.getBoundingClientRect();
+      if (rectArea(rect) < viewportArea * 0.12) continue;
+      const background = window.getComputedStyle(element).backgroundImage;
+      if (background && background !== "none") return true;
+    }
+
+    return false;
+  }
+
+  function previewRoot() {
+    const viewportArea = Math.max(1, window.innerWidth * window.innerHeight);
+    const candidates = [];
+
+    for (const element of document.querySelectorAll("[role='dialog'],[aria-modal='true'],[data-state='open']")) {
+      if (!(element instanceof HTMLElement) || !visible(element)) continue;
+      const rect = element.getBoundingClientRect();
+      if (rectArea(rect) < viewportArea * 0.35) continue;
+      if (!hasPreviewMedia(element)) continue;
+      candidates.push({ element, area: rectArea(rect) });
+    }
+
+    if (candidates.length) {
+      candidates.sort((a, b) => b.area - a.area);
+      return candidates[0].element;
+    }
+
+    for (const media of document.querySelectorAll("img,canvas,video,picture")) {
+      if (!(media instanceof HTMLElement) || !visible(media)) continue;
+      const mediaRect = media.getBoundingClientRect();
+      if (rectArea(mediaRect) < viewportArea * 0.14) continue;
+
+      let ancestor = media.parentElement;
+      while (ancestor instanceof HTMLElement && ancestor !== document.body) {
+        const style = window.getComputedStyle(ancestor);
+        const rect = ancestor.getBoundingClientRect();
+        if ((style.position === "fixed" || style.position === "absolute") && rectArea(rect) >= viewportArea * 0.55) {
+          return ancestor;
+        }
+        ancestor = ancestor.parentElement;
+      }
+    }
+
+    return null;
+  }
+
+  function isCloseLabel(element) {
+    if (!(element instanceof HTMLElement)) return false;
     const labels = [
       element.textContent,
       element.getAttribute("aria-label"),
@@ -64,45 +127,108 @@ function installRuntime() {
       label === "关闭" ||
       label === "关闭预览" ||
       label === "close preview" ||
+      label === "close image" ||
       label === "×" ||
       label === "✕" ||
       label === "✖"
     );
   }
 
-  function hasLargePreviewImage() {
-    const viewportArea = Math.max(1, window.innerWidth * window.innerHeight);
-    for (const image of document.querySelectorAll("img")) {
-      if (!(image instanceof HTMLImageElement) || !visible(image)) continue;
-      const rect = image.getBoundingClientRect();
-      if (rect.width < 360 || rect.height < 240) continue;
-      if (rect.width * rect.height >= viewportArea * 0.20) return true;
+  function findOriginalClose(root) {
+    if (!(root instanceof HTMLElement)) return null;
+    const rootRect = root.getBoundingClientRect();
+    const labeled = [];
+    const positional = [];
+
+    for (const button of root.querySelectorAll("button,[role='button']")) {
+      if (!(button instanceof HTMLElement) || !visible(button) || button.id === PROXY_ID) continue;
+      const rect = button.getBoundingClientRect();
+      if (rect.width > 72 || rect.height > 72) continue;
+      const nearTop = rect.top <= rootRect.top + 112;
+      const nearRight = rect.right >= rootRect.right - 260;
+      if (!nearTop || !nearRight) continue;
+
+      const distance = Math.abs(rootRect.right - rect.right) + Math.abs(rect.top - rootRect.top);
+      if (isCloseLabel(button)) labeled.push({ button, distance });
+      else positional.push({ button, distance });
     }
-    return false;
+
+    const candidates = labeled.length ? labeled : positional;
+    candidates.sort((a, b) => a.distance - b.distance);
+    return candidates[0]?.button ?? null;
   }
 
-  function applySafePosition(button) {
-    if (!(button instanceof HTMLElement) || button.dataset[MARKER] === "true") return;
-    const rect = button.getBoundingClientRect();
-    if (rect.top > 84 || rect.right < window.innerWidth - 220) return;
+  function ensureStyle() {
+    if (document.getElementById(STYLE_ID)) return;
+    const target = document.head || document.documentElement;
+    if (!target) return;
 
-    const position = window.getComputedStyle(button).position;
-    if (position === "absolute" || position === "fixed" || position === "sticky") {
-      button.style.setProperty("right", "152px", "important");
-      button.style.setProperty("left", "auto", "important");
-    } else {
-      button.style.setProperty("transform", "translateX(-138px)", "important");
+    const style = document.createElement("style");
+    style.id = STYLE_ID;
+    style.textContent = [
+      `#${PROXY_ID}{position:fixed;top:8px;right:172px;width:34px;height:34px;display:grid;place-items:center;padding:0;border:1px solid rgba(127,127,127,.24);border-radius:999px;background:rgba(245,245,245,.78);color:#202020;font:24px/1 sans-serif;z-index:2147483646;cursor:default;-webkit-app-region:no-drag;-webkit-backdrop-filter:blur(14px) saturate(140%);backdrop-filter:blur(14px) saturate(140%)}`,
+      `#${PROXY_ID}:hover{background:rgba(255,255,255,.94)}`,
+      `@media (prefers-color-scheme:dark){#${PROXY_ID}{background:rgba(36,36,36,.78);color:#f4f4f4;border-color:rgba(255,255,255,.12)}#${PROXY_ID}:hover{background:rgba(54,54,54,.94)}}`,
+    ].join("");
+    target.appendChild(style);
+  }
+
+  function dispatchEscape() {
+    const init = { key: "Escape", code: "Escape", keyCode: 27, which: 27, bubbles: true, cancelable: true };
+    document.dispatchEvent(new KeyboardEvent("keydown", init));
+    document.dispatchEvent(new KeyboardEvent("keyup", init));
+    window.dispatchEvent(new KeyboardEvent("keydown", init));
+    window.dispatchEvent(new KeyboardEvent("keyup", init));
+  }
+
+  function moveOriginal(button) {
+    if (!(button instanceof HTMLElement) || button.dataset[MOVED_MARKER] === "true") return;
+    button.style.setProperty("transform", "translateX(-156px)", "important");
+    button.style.setProperty("z-index", "2147483645", "important");
+    button.dataset[MOVED_MARKER] = "true";
+  }
+
+  function removeProxy() {
+    document.getElementById(PROXY_ID)?.remove();
+  }
+
+  function ensureProxy(root, original) {
+    ensureStyle();
+    let proxy = document.getElementById(PROXY_ID);
+    if (!(proxy instanceof HTMLButtonElement)) {
+      proxy = document.createElement("button");
+      proxy.id = PROXY_ID;
+      proxy.type = "button";
+      proxy.textContent = "×";
+      proxy.title = "Close preview";
+      proxy.setAttribute("aria-label", "Close preview");
+      document.body?.appendChild(proxy);
     }
-    button.dataset[MARKER] = "true";
+
+    proxy.onclick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const currentRoot = previewRoot() || root;
+      const currentOriginal = findOriginalClose(currentRoot) || original;
+      if (currentOriginal instanceof HTMLElement && currentOriginal !== proxy) {
+        currentOriginal.click();
+      } else {
+        dispatchEscape();
+      }
+      window.setTimeout(scheduleScan, 60);
+    };
   }
 
   function scan() {
-    if (!hasLargePreviewImage()) return;
-
-    for (const button of document.querySelectorAll("button,[role='button']")) {
-      if (!(button instanceof HTMLElement) || !isCloseControl(button)) continue;
-      applySafePosition(button);
+    const root = previewRoot();
+    if (!root) {
+      removeProxy();
+      return;
     }
+
+    const original = findOriginalClose(root);
+    if (original) moveOriginal(original);
+    ensureProxy(root, original);
   }
 
   function scheduleScan() {
@@ -110,7 +236,7 @@ function installRuntime() {
     scanTimer = window.setTimeout(() => {
       scanTimer = null;
       scan();
-    }, 80);
+    }, 60);
   }
 
   const start = () => {
@@ -121,10 +247,13 @@ function installRuntime() {
         childList: true,
         subtree: true,
         attributes: true,
-        attributeFilter: ["aria-label", "title", "class", "style"],
+        attributeFilter: ["aria-label", "aria-modal", "title", "class", "style", "data-state"],
       });
     }
     window.addEventListener("resize", scheduleScan, { passive: true });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") window.setTimeout(scheduleScan, 60);
+    }, true);
   };
 
   if (document.readyState === "loading") {

@@ -1,7 +1,7 @@
 "use strict";
 
 const APP_PAGE_ASSET_PATTERN = /^app-initial-[A-Za-z0-9_-]+\.js$/;
-const RUNTIME_MARKER = "__codexLinuxConversationTabsRuntimeV1";
+const RUNTIME_MARKER = "__codexLinuxConversationTabsRuntimeV2";
 const APP_PAGE_MARKERS = [
   "group/folder-row",
   "className:`text-fade-truncate pe-1`",
@@ -26,14 +26,15 @@ function installConversationTabsRuntime() {
 
   if (typeof window === "undefined" || typeof document === "undefined") return;
 
-  const GLOBAL_KEY = "__codexLinuxConversationTabsRuntimeV1";
+  const GLOBAL_KEY = "__codexLinuxConversationTabsRuntimeV2";
   if (window[GLOBAL_KEY]) return;
   window[GLOBAL_KEY] = true;
 
   const BAR_ID = "codex-linux-conversation-tabs";
   const LIST_ID = "codex-linux-conversation-tabs-list";
   const STYLE_ID = "codex-linux-conversation-tabs-style";
-  const STORAGE_KEY = "codex-linux-conversation-tabs-v1";
+  const STORAGE_KEY = "codex-linux-conversation-tabs-v2";
+  const LEGACY_STORAGE_KEY = "codex-linux-conversation-tabs-v1";
   const MAX_TABS = 16;
   const CONVERSATION_ROUTE = /(?:^|[\/#])(?:c|chat|conversation|thread)\/[A-Za-z0-9_-]{6,}(?:[\/?#]|$)/i;
   const NEW_CHAT_LABELS = [
@@ -46,63 +47,11 @@ function installConversationTabsRuntime() {
     "开始新聊天",
     "开始新对话",
   ];
-  const RECENT_LABELS = new Set([
-    "recents",
-    "recent",
-    "recent chats",
-    "chats",
-    "conversations",
-    "最近",
-    "近期",
-    "最近使用",
-    "最近聊天",
-    "聊天",
-    "对话",
-  ]);
-  const SECTION_BARRIER_LABELS = new Set([
-    "projects",
-    "project",
-    "work",
-    "codex",
-    "plugins",
-    "plugin",
-    "gpts",
-    "library",
-    "项目",
-    "工作",
-    "插件",
-    "资料库",
-  ]);
-  const STATIC_LABELS = new Set([
-    "new chat",
-    "new conversation",
-    "search",
-    "library",
-    "projects",
-    "project",
-    "work",
-    "codex",
-    "plugins",
-    "plugin",
-    "scheduled",
-    "sites",
-    "settings",
-    "新聊天",
-    "新建聊天",
-    "新建对话",
-    "搜索",
-    "资料库",
-    "项目",
-    "工作",
-    "插件",
-    "已安排",
-    "站点",
-    "设置",
-  ]);
 
   let tabs = [];
   let activeKey = null;
   let syncTimer = null;
+  let draftCounter = 0;
 
   function normalizeLabel(value) {
     return String(value ?? "").replace(/\s+/g, " ").trim().toLocaleLowerCase();
@@ -115,7 +64,7 @@ function installConversationTabsRuntime() {
       const sameOrigin = url.origin === window.location.origin;
       const sameFileProtocol = url.protocol === "file:" && window.location.protocol === "file:";
       if (!sameOrigin && !sameFileProtocol) return null;
-      return `${url.pathname}${url.hash}`;
+      return `${url.pathname}${url.search}${url.hash}`;
     } catch {
       return null;
     }
@@ -123,6 +72,17 @@ function installConversationTabsRuntime() {
 
   function isConversationHref(href) {
     return typeof href === "string" && CONVERSATION_ROUTE.test(href);
+  }
+
+  function visible(element) {
+    if (!(element instanceof HTMLElement)) return false;
+    const rect = element.getBoundingClientRect();
+    if (rect.width < 8 || rect.height < 8) return false;
+    if (rect.bottom <= 0 || rect.right <= 0 || rect.top >= window.innerHeight || rect.left >= window.innerWidth) {
+      return false;
+    }
+    const style = window.getComputedStyle(element);
+    return style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
   }
 
   function elementLabels(element) {
@@ -138,50 +98,15 @@ function installConversationTabsRuntime() {
 
   function displayTitle(element) {
     if (!(element instanceof Element)) return "";
-    const candidates = [
+    for (const candidate of [
       element.textContent,
       element.getAttribute("aria-label"),
       element.getAttribute("title"),
-    ];
-    for (const candidate of candidates) {
+    ]) {
       const compact = String(candidate ?? "").replace(/\s+/g, " ").trim();
       if (compact) return compact.slice(0, 120);
     }
     return "";
-  }
-
-  function visibleRect(element) {
-    if (!(element instanceof HTMLElement)) return null;
-    const rect = element.getBoundingClientRect();
-    if (rect.width < 40 || rect.height < 40) return null;
-    const style = window.getComputedStyle(element);
-    if (style.display === "none" || style.visibility === "hidden") return null;
-    return rect;
-  }
-
-  function sidebarCandidates() {
-    const candidates = [];
-    const seen = new Set();
-    for (const element of document.querySelectorAll("aside,nav,[data-testid*='sidebar'],[class*='sidebar']")) {
-      if (!(element instanceof HTMLElement) || seen.has(element)) continue;
-      seen.add(element);
-      const rect = visibleRect(element);
-      if (!rect) continue;
-      if (rect.left > 64 || rect.width > 480 || rect.height < window.innerHeight * 0.45) continue;
-      candidates.push({ element, rect });
-    }
-    candidates.sort((a, b) => b.rect.height - a.rect.height || b.rect.width - a.rect.width);
-    return candidates;
-  }
-
-  function sidebarFor(element) {
-    return sidebarCandidates().find((candidate) => candidate.element.contains(element))?.element ?? null;
-  }
-
-  function sidebarRight() {
-    const candidates = sidebarCandidates();
-    if (candidates.length === 0) return 0;
-    return Math.max(...candidates.map((candidate) => candidate.rect.right));
   }
 
   function clickableFrom(target) {
@@ -202,58 +127,41 @@ function installConversationTabsRuntime() {
     );
   }
 
-  function isInsideRecentSection(element, sidebar) {
-    if (!(element instanceof Element) || !(sidebar instanceof Element)) return false;
-    const rowRect = element.getBoundingClientRect();
-    let recentTop = Number.NEGATIVE_INFINITY;
-    let barrierTop = Number.NEGATIVE_INFINITY;
-
-    for (const candidate of sidebar.querySelectorAll("h1,h2,h3,h4,h5,h6,[role='heading'],div,span,p")) {
-      if (!(candidate instanceof HTMLElement)) continue;
-      const label = normalizeLabel(candidate.textContent);
-      if (!label || label.length > 32) continue;
-      const rect = candidate.getBoundingClientRect();
-      if (rect.bottom > rowRect.top + 2) continue;
-      if (RECENT_LABELS.has(label)) recentTop = Math.max(recentTop, rect.top);
-      if (SECTION_BARRIER_LABELS.has(label)) barrierTop = Math.max(barrierTop, rect.top);
-    }
-
-    return Number.isFinite(recentTop) && recentTop > barrierTop;
-  }
-
   function tabDescriptorFor(element) {
     if (!(element instanceof Element) || element.closest(`#${BAR_ID}`)) return null;
-    const title = displayTitle(element);
-    if (!title) return null;
     const href = hrefFrom(element);
+    if (!href || !isConversationHref(href)) return null;
+    const title = displayTitle(element) || "Chat";
+    return { key: `href:${href}`, href, title };
+  }
 
-    if (href && isConversationHref(href)) {
-      return { key: `href:${href}`, href, title };
+  function cleanStoredTabs(parsed) {
+    if (!Array.isArray(parsed)) return [];
+    const clean = [];
+    const seen = new Set();
+    for (const item of parsed) {
+      if (!item || typeof item.href !== "string" || typeof item.title !== "string") continue;
+      const href = normalizedHref(item.href);
+      if (!href || !isConversationHref(href)) continue;
+      const key = `href:${href}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      clean.push({ key, href, title: item.title.slice(0, 120), draft: false });
     }
-
-    const sidebar = sidebarFor(element);
-    if (!sidebar || STATIC_LABELS.has(normalizeLabel(title)) || !isInsideRecentSection(element, sidebar)) {
-      return null;
-    }
-
-    return { key: `title:${normalizeLabel(title)}`, href: null, title };
+    return clean.slice(-MAX_TABS);
   }
 
   function loadTabs() {
     try {
-      const parsed = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || "[]");
-      if (!Array.isArray(parsed)) return [];
-      const clean = [];
-      const seen = new Set();
-      for (const item of parsed) {
-        if (!item || typeof item.key !== "string" || typeof item.title !== "string") continue;
-        if (seen.has(item.key)) continue;
-        const href = typeof item.href === "string" ? item.href : null;
-        if (href && !isConversationHref(href)) continue;
-        seen.add(item.key);
-        clean.push({ key: item.key, href, title: item.title.slice(0, 120) });
-      }
-      return clean.slice(-MAX_TABS);
+      const current = window.localStorage.getItem(STORAGE_KEY);
+      if (current != null) return cleanStoredTabs(JSON.parse(current));
+
+      const legacy = window.localStorage.getItem(LEGACY_STORAGE_KEY);
+      if (legacy == null) return [];
+      const migrated = cleanStoredTabs(JSON.parse(legacy));
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated));
+      window.localStorage.removeItem(LEGACY_STORAGE_KEY);
+      return migrated;
     } catch {
       return [];
     }
@@ -261,31 +169,46 @@ function installConversationTabsRuntime() {
 
   function saveTabs() {
     try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(tabs));
+      const persisted = tabs.filter((tab) => !tab.draft);
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(persisted));
+      window.localStorage.removeItem(LEGACY_STORAGE_KEY);
     } catch {
       // Storage failure must never affect ChatGPT itself.
     }
+  }
+
+  function sidebarRight() {
+    const candidates = [];
+    for (const element of document.querySelectorAll("aside,nav,[data-testid*='sidebar'],[class*='sidebar']")) {
+      if (!(element instanceof HTMLElement) || !visible(element)) continue;
+      const rect = element.getBoundingClientRect();
+      if (rect.left > 64 || rect.width > 480 || rect.height < window.innerHeight * 0.45) continue;
+      candidates.push(rect.right);
+    }
+    return candidates.length ? Math.max(...candidates) : 0;
   }
 
   function ensureStyle() {
     if (document.getElementById(STYLE_ID)) return;
     const target = document.head || document.documentElement;
     if (!target) return;
+
     const style = document.createElement("style");
     style.id = STYLE_ID;
     style.textContent = [
-      `#${BAR_ID}{position:fixed;top:0;height:48px;box-sizing:border-box;display:flex;align-items:flex-end;gap:4px;padding:0 6px 4px;background:Canvas;color:CanvasText;border-bottom:1px solid rgba(127,127,127,.18);z-index:2147483000;-webkit-app-region:no-drag;font-family:inherit;pointer-events:auto}`,
+      `#${BAR_ID}{position:fixed;top:0;height:48px;box-sizing:border-box;display:flex;align-items:flex-end;gap:4px;padding:0 6px 4px;background:rgba(248,248,248,.72);color:#202020;border-bottom:1px solid rgba(127,127,127,.18);z-index:2147483000;-webkit-app-region:no-drag;font-family:inherit;pointer-events:auto;-webkit-backdrop-filter:blur(18px) saturate(145%);backdrop-filter:blur(18px) saturate(145%)}`,
       `#${LIST_ID}{display:flex;align-items:flex-end;gap:3px;min-width:0;flex:1;overflow-x:auto;overflow-y:hidden;scrollbar-width:none}`,
       `#${LIST_ID}::-webkit-scrollbar{display:none}`,
-      `#${BAR_ID} .codex-linux-conversation-tab{height:32px;min-width:108px;max-width:220px;box-sizing:border-box;display:flex;align-items:center;gap:4px;padding:0 7px 0 10px;border:1px solid transparent;border-radius:8px;background:rgba(127,127,127,.10);cursor:default;user-select:none;outline:none;-webkit-app-region:no-drag}`,
-      `#${BAR_ID} .codex-linux-conversation-tab:hover{background:rgba(127,127,127,.16)}`,
-      `#${BAR_ID} .codex-linux-conversation-tab[data-active='true']{background:rgba(127,127,127,.22);border-color:rgba(127,127,127,.22)}`,
+      `#${BAR_ID} .codex-linux-conversation-tab{height:32px;min-width:108px;max-width:220px;box-sizing:border-box;display:flex;align-items:center;gap:4px;padding:0 7px 0 10px;border:1px solid rgba(127,127,127,.12);border-radius:8px;background:rgba(255,255,255,.34);cursor:default;user-select:none;outline:none;-webkit-app-region:no-drag;-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px)}`,
+      `#${BAR_ID} .codex-linux-conversation-tab:hover{background:rgba(255,255,255,.48)}`,
+      `#${BAR_ID} .codex-linux-conversation-tab[data-active='true']{background:rgba(255,255,255,.64);border-color:rgba(127,127,127,.24)}`,
       `#${BAR_ID} .codex-linux-conversation-tab-label{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}`,
       `#${BAR_ID} button{font:inherit;color:inherit}`,
       `#${BAR_ID} .codex-linux-conversation-tab-close,#${BAR_ID} .codex-linux-conversation-tab-add{border:0;background:transparent;border-radius:6px;display:grid;place-items:center;padding:0;cursor:default;-webkit-app-region:no-drag}`,
       `#${BAR_ID} .codex-linux-conversation-tab-close{width:20px;height:20px;font-size:16px;line-height:1;opacity:.65}`,
       `#${BAR_ID} .codex-linux-conversation-tab-close:hover,#${BAR_ID} .codex-linux-conversation-tab-add:hover{background:rgba(127,127,127,.18);opacity:1}`,
       `#${BAR_ID} .codex-linux-conversation-tab-add{width:32px;height:32px;flex:0 0 32px;font-size:20px;line-height:1}`,
+      `@media (prefers-color-scheme:dark){#${BAR_ID}{background:rgba(18,18,18,.70);color:#f3f3f3}#${BAR_ID} .codex-linux-conversation-tab{background:rgba(64,64,64,.34);border-color:rgba(255,255,255,.06)}#${BAR_ID} .codex-linux-conversation-tab:hover{background:rgba(78,78,78,.48)}#${BAR_ID} .codex-linux-conversation-tab[data-active='true']{background:rgba(92,92,92,.58);border-color:rgba(255,255,255,.10)}}`,
     ].join("");
     target.appendChild(style);
   }
@@ -313,7 +236,7 @@ function installConversationTabsRuntime() {
     add.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      createNewChat();
+      createNewChat(true);
     });
     bar.appendChild(add);
 
@@ -376,46 +299,52 @@ function installConversationTabsRuntime() {
 
   function upsertTab(tab, makeActive) {
     if (!tab || typeof tab.key !== "string" || typeof tab.title !== "string") return;
-    let changed = false;
     const index = tabs.findIndex((item) => item.key === tab.key);
     if (index === -1) {
-      tabs.push({ key: tab.key, href: tab.href ?? null, title: tab.title.slice(0, 120) });
+      tabs.push({
+        key: tab.key,
+        href: tab.href ?? null,
+        title: tab.title.slice(0, 120),
+        draft: Boolean(tab.draft),
+      });
       if (tabs.length > MAX_TABS) tabs = tabs.slice(-MAX_TABS);
-      changed = true;
     } else {
-      const current = tabs[index];
-      const nextHref = tab.href ?? current.href ?? null;
-      const nextTitle = tab.title.slice(0, 120);
-      if (current.href !== nextHref || current.title !== nextTitle) {
-        tabs[index] = { ...current, href: nextHref, title: nextTitle };
-        changed = true;
-      }
+      tabs[index] = {
+        ...tabs[index],
+        href: tab.href ?? tabs[index].href ?? null,
+        title: tab.title.slice(0, 120),
+        draft: Boolean(tab.draft ?? tabs[index].draft),
+      };
     }
 
-    if (makeActive && activeKey !== tab.key) {
-      activeKey = tab.key;
-      changed = true;
-    }
-
-    if (!changed) return;
+    if (makeActive) activeKey = tab.key;
     saveTabs();
     render();
   }
 
-  function findClickableForTab(tab) {
-    if (!tab) return null;
-    if (tab.href) {
-      for (const anchor of document.querySelectorAll("a[href]")) {
-        if (anchor.closest(`#${BAR_ID}`)) continue;
-        if (hrefFrom(anchor) === tab.href) return anchor;
-      }
-    }
+  function beginDraft(forceNew) {
+    const current = tabs.find((tab) => tab.key === activeKey);
+    if (!forceNew && current?.draft) return current;
 
-    const wanted = normalizeLabel(tab.title);
-    for (const sidebar of sidebarCandidates()) {
-      for (const candidate of sidebar.element.querySelectorAll("a[href],button,[role='button']")) {
-        if (normalizeLabel(displayTitle(candidate)) === wanted) return candidate;
-      }
+    draftCounter += 1;
+    const draft = {
+      key: `draft:${Date.now()}:${draftCounter}`,
+      href: null,
+      title: "新聊天",
+      draft: true,
+    };
+    tabs.push(draft);
+    if (tabs.length > MAX_TABS) tabs = tabs.slice(-MAX_TABS);
+    activeKey = draft.key;
+    render();
+    return draft;
+  }
+
+  function findClickableForTab(tab) {
+    if (!tab?.href) return null;
+    for (const anchor of document.querySelectorAll("a[href]")) {
+      if (anchor.closest(`#${BAR_ID}`)) continue;
+      if (hrefFrom(anchor) === tab.href) return anchor;
     }
     return null;
   }
@@ -425,6 +354,11 @@ function installConversationTabsRuntime() {
     if (!tab) return;
     activeKey = tab.key;
     render();
+
+    if (tab.draft) {
+      navigateToNewChat();
+      return;
+    }
 
     const target = findClickableForTab(tab);
     if (target instanceof HTMLElement) {
@@ -436,7 +370,7 @@ function installConversationTabsRuntime() {
     try {
       window.location.assign(new URL(tab.href, document.baseURI || window.location.href).href);
     } catch {
-      // If the stored route is no longer valid, keep the tab without disturbing the app.
+      // A stale route must not disturb the app.
     }
   }
 
@@ -456,27 +390,42 @@ function installConversationTabsRuntime() {
     activeKey = null;
     render();
     if (neighbor) activateTab(neighbor.key);
-    else createNewChat();
+    else createNewChat(true);
   }
 
   function findNewChatControl() {
-    for (const sidebar of sidebarCandidates()) {
-      for (const candidate of sidebar.element.querySelectorAll("a[href],button,[role='button']")) {
-        if (isNewChatControl(candidate)) return candidate;
-      }
+    const candidates = [];
+    for (const candidate of document.querySelectorAll("a[href],button,[role='button']")) {
+      if (!(candidate instanceof HTMLElement) || candidate.closest(`#${BAR_ID}`) || !visible(candidate)) continue;
+      if (!isNewChatControl(candidate)) continue;
+      const rect = candidate.getBoundingClientRect();
+      const score = (rect.left < 420 ? 0 : 5000) + rect.top + rect.left * 0.01;
+      candidates.push({ candidate, score });
     }
-    return null;
+    candidates.sort((a, b) => a.score - b.score);
+    return candidates[0]?.candidate ?? null;
   }
 
-  function createNewChat() {
-    activeKey = null;
-    render();
+  function navigateToNewChat() {
     const target = findNewChatControl();
     if (target instanceof HTMLElement) {
       target.click();
       return;
     }
-    console.warn("WARN: ChatGPT New chat control not found - conversation tab add button did not navigate");
+
+    try {
+      const next = new URL(window.location.href);
+      next.pathname = "/";
+      next.hash = "";
+      window.location.assign(next.href);
+    } catch {
+      console.warn("WARN: ChatGPT New chat control not found - conversation tab did not navigate");
+    }
+  }
+
+  function createNewChat(forceNewDraft) {
+    beginDraft(Boolean(forceNewDraft));
+    navigateToNewChat();
   }
 
   function titleForHref(href) {
@@ -493,30 +442,33 @@ function installConversationTabsRuntime() {
   function syncFromLocation() {
     const href = normalizedHref(window.location.href);
     if (!isConversationHref(href)) return false;
-    upsertTab({ key: `href:${href}`, href, title: titleForHref(href) }, true);
-    return true;
-  }
 
-  function syncFromActiveSidebar() {
-    for (const sidebar of sidebarCandidates()) {
-      for (const active of sidebar.element.querySelectorAll(
-        "[aria-current='page'],[aria-selected='true'],[data-state='active'],[data-active='true']",
-      )) {
-        const clickable = clickableFrom(active) || active;
-        const tab = tabDescriptorFor(clickable);
-        if (!tab) continue;
-        upsertTab(tab, true);
-        return true;
+    const key = `href:${href}`;
+    const title = titleForHref(href);
+    const draftIndex = tabs.findIndex((tab) => tab.key === activeKey && tab.draft);
+    const existingIndex = tabs.findIndex((tab) => tab.key === key);
+
+    if (draftIndex !== -1) {
+      if (existingIndex !== -1 && existingIndex !== draftIndex) {
+        tabs.splice(draftIndex, 1);
+      } else {
+        tabs[draftIndex] = { key, href, title, draft: false };
       }
+      activeKey = key;
+      saveTabs();
+      render();
+      return true;
     }
-    return false;
+
+    upsertTab({ key, href, title, draft: false }, true);
+    return true;
   }
 
   function syncState() {
     ensureStyle();
     if (!document.getElementById(BAR_ID)) render();
     updateGeometry();
-    if (!syncFromLocation()) syncFromActiveSidebar();
+    syncFromLocation();
   }
 
   function scheduleSync() {
@@ -537,15 +489,30 @@ function installConversationTabsRuntime() {
       (event) => {
         const clickable = clickableFrom(event.target);
         if (!clickable || clickable.closest(`#${BAR_ID}`)) return;
+
         if (isNewChatControl(clickable)) {
-          if (activeKey !== null) {
-            activeKey = null;
-            render();
-          }
+          beginDraft(false);
           return;
         }
+
         const tab = tabDescriptorFor(clickable);
         if (tab) upsertTab(tab, true);
+      },
+      true,
+    );
+
+    document.addEventListener(
+      "contextmenu",
+      (event) => {
+        if (!event.ctrlKey) return;
+        const clickable = clickableFrom(event.target);
+        if (!clickable || clickable.closest(`#${BAR_ID}`)) return;
+        const tab = tabDescriptorFor(clickable);
+        if (!tab) return;
+
+        event.preventDefault();
+        event.stopPropagation();
+        upsertTab(tab, false);
       },
       true,
     );
@@ -556,7 +523,7 @@ function installConversationTabsRuntime() {
         childList: true,
         subtree: true,
         attributes: true,
-        attributeFilter: ["aria-current", "aria-selected", "data-state", "data-active", "href"],
+        attributeFilter: ["href", "aria-label", "title"],
       });
     }
 
