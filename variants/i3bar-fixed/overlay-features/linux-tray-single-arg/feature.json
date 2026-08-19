@@ -1,9 +1,9 @@
 {
   "id": "linux-tray-single-arg",
   "title": "Complete Linux Tray Compatibility",
-  "description": "Patches both current bundle locations to restore stock-Electron Tray readiness fallbacks, a strong reference, Linux one-argument construction, and retention past the feature gate.",
+  "description": "Patches both current bundle locations to restore stock-Electron Tray readiness fallbacks, a strong reference, Linux one-argument construction, and retention past the feature gate; the entrypoint also composes an isolated non-blocking Linux titlebar overlay theme compatibility patch.",
   "defaultEnabled": false,
   "entrypoints": {
-    "patchDescriptors": "./patch.js"
+    "patchDescriptors": "./combined.js"
   }
 }
