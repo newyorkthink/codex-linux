@@ -6,7 +6,7 @@
 
 这是一个面向 Linux 的公开自动构建仓库，构建来源为上游项目 [`ilysenko/codex-desktop-linux`](https://github.com/ilysenko/codex-desktop-linux)。
 
-本仓库只保存公开的构建配置、独立托盘修复和说明，不包含私人配置、私有仓库内容、账号凭据、访问令牌或其他个人数据。
+本仓库只保存公开的构建配置、独立托盘修复、独立 Linux 标题栏主题兼容补丁和说明，不包含私人配置、私有仓库内容、账号凭据、访问令牌或其他个人数据。
 
 当前上游应用是 ChatGPT Desktop 运行时，不是只包含 Codex 的客户端；桌面应用可提供 Chat、Work 和 Codex，具体功能仍由 OpenAI 账号、套餐和工作区权限控制。按照 OpenAI 当前说明，符合条件时 Desktop 的 Work 可以在用户授权后访问本机文件和目录；参考 [`ChatGPT Work and Codex`](https://help.openai.com/en/articles/20001275/)。
 
@@ -17,7 +17,7 @@
 | 文件 | 内容 | 适用情况 |
 | --- | --- | --- |
 | `codex-desktop-stock-x86_64.AppImage` | **官方核心原版（Stock）**。按字节保留当前 OpenAI 官方 Linux 包的 `resources/app.asar`，并沿用其中的 Electron 运行时和配套工具；不启用本仓库的 i3bar 源码补丁，也不替换运行时。 | 上游已经修复托盘，或需要完全避开本仓库托盘修改时使用。 |
-| `codex-desktop-i3bar-fixed-x86_64.AppImage` | **i3bar 修复版（Fixed）**。在 Stock 基础上应用已经实机验证的独立托盘补丁，并把缺少 XEmbed 的 Owl 替换为同版本标准 Electron。 | 当前 Kali Linux + i3wm / classic i3bar 需要显示 ChatGPT 托盘图标时使用。 |
+| `codex-desktop-i3bar-fixed-x86_64.AppImage` | **i3bar 修复版（Fixed）**。在 Stock 基础上应用已经实机验证的独立托盘补丁，把缺少 XEmbed 的 Owl 替换为同版本标准 Electron，并组合独立的 Linux 标题栏浅色主题兼容补丁。 | 当前 Kali Linux + i3wm / classic i3bar 需要显示 ChatGPT 托盘图标，或需要修复浅色主题右上角窗口按钮对比度时使用。 |
 
 Stock 文件名中的“官方核心原版”表示官方 `resources/app.asar` 按字节保留，官方包内的 Electron 运行时和配套工具不做托盘相关替换；只有 Linux AppImage 外层、启动脚本、图标和社区包身份由上游打包项目生成。因此它**不是 OpenAI 官方发布的 AppImage**，也不承诺整个文件与官方 `.deb` 按字节相同。
 
@@ -47,9 +47,12 @@ ChatGPT Desktop AppImage -> ~/.codex-chatgpt-desktop
 1. 同时修改当前 `main-*.js` 和 `window-all-closed-*.js` 两个 bundle，恢复 Linux 单参数 `Tray` 构造、对象强引用、就绪回退和生命周期。
 2. 将缺少 classic i3bar 所需 `GtkStatusIcon` / XEmbed 后端的 Owl 运行时替换为完全相同版本的标准 Electron。
 3. 按标准 Electron ABI 重新编译 `better-sqlite3` 和 `node-pty`。
-4. 发布前校验 Electron 官方 SHA256、两个补丁合同、两个原生模块和五个 `gtk_status_icon_*` 符号。
+4. 发布前校验 Electron 官方 SHA256、两个托盘 bundle 合同、两个原生模块和五个 `gtk_status_icon_*` 符号。
+5. 以独立组件修复 Linux `titleBarOverlay` 浅色主题背景：深色主题保持上游原值，浅色主题仅把 overlay 背景切换为 `#ffffff`，不删除最小化、最大化或关闭按钮，也不启用 `frameless-titlebar`。
 
-2026-08-15 已完成 Kali Linux + i3wm 实机验收：i3bar 出现 ChatGPT 托盘图标，右键菜单可以正常打开。完整排查过程见 [`TRAY_DEBUG_HISTORY.md`](TRAY_DEBUG_HISTORY.md)。
+托盘稳定基线与标题栏主题兼容层彼此分离：托盘逻辑仍保留在既有 `patch.js` 中；标题栏逻辑位于 [`components/titlebar-overlay-theme/`](variants/i3bar-fixed/overlay-features/linux-tray-single-arg/components/titlebar-overlay-theme/)，由 `combined.js` 组合。若以后上游已经提供主题感知的标题栏背景，该标题栏补丁会保持源码字节不变；如果标题栏 helper 合同变化或匹配不唯一，也只跳过该可选兼容层，不会把旧标题栏补丁强行套到新上游。更详细的边界与退役条件见 [`variants/i3bar-fixed/README.md`](variants/i3bar-fixed/README.md)。
+
+2026-08-15 已完成 Kali Linux + i3wm 托盘实机验收：i3bar 出现 ChatGPT 托盘图标，右键菜单可以正常打开。完整托盘排查过程见 [`TRAY_DEBUG_HISTORY.md`](TRAY_DEBUG_HISTORY.md)。
 
 ### 自动构建与上游更新保护
 
@@ -59,9 +62,10 @@ GitHub Actions 每 30 分钟检查一次上游 `main`；同一个上游提交不
 
 1. 克隆并锁定本轮上游提交后，只修改上游 AppImage 的 `AppRun` 模板，加入 Desktop 专用 `CODEX_HOME` 隔离；该修改不进入 `resources/app.asar`，也不用于原生包。
 2. 用空 feature 配置构建并校验 Stock AppImage，确保没有启用或应用任何本仓库源码补丁，并检查最终 AppImage staging 中仍包含独立 `CODEX_HOME` 启动配置。
-3. 再检查当前官方 bundle 合同和 Electron 主版本；只有仍匹配已验证基线时，才构建 i3bar Fixed，并再次检查其 AppImage staging 中的独立 `CODEX_HOME` 配置。
-4. 如果上游已经修改托盘实现、直接完成修复或升级 Electron 主版本，旧修复会自动跳过，Stock 仍可正常发布，不会因旧补丁漂移拖垮整个 Action。
-5. 当前合同仍匹配时，Fixed 的任一补丁、ABI、运行库或产物校验失败都会终止发布，禁止生成部分修复包。
+3. 再检查当前官方托盘 bundle 合同和 Electron 主版本；只有仍匹配已验证托盘基线时，才构建 i3bar Fixed，并再次检查其 AppImage staging 中的独立 `CODEX_HOME` 配置。
+4. i3bar Fixed 内的标题栏主题补丁单独判断自己的 helper 合同：已由上游修复时保持字节不变，未知或重复合同时跳过并报告警告，不参与严格托盘合同，也不会因为这个可选外观层单独阻断已验证的托盘构建。
+5. 如果上游已经修改托盘实现、直接完成 i3bar 修复或升级 Electron 主版本，旧托盘修复会自动跳过，Stock 仍可正常发布，不会因旧托盘补丁漂移拖垮整个 Action。
+6. 托盘合同仍匹配时，严格托盘补丁、ABI、运行库或产物校验失败都会终止发布，禁止生成部分托盘修复包。
 
 ### 对主机系统的影响
 
@@ -79,7 +83,7 @@ AppImage 的显示大小不要求与官方 `.deb` 或旧构建一致：外层 Sq
 
 This public repository automatically builds Linux packages from [`ilysenko/codex-desktop-linux`](https://github.com/ilysenko/codex-desktop-linux).
 
-It stores only public build configuration, the isolated tray workaround, and documentation. It contains no private configuration, private-repository content, credentials, access tokens, or other personal data.
+It stores only public build configuration, the isolated tray workaround, the isolated Linux titlebar-theme compatibility patch, and documentation. It contains no private configuration, private-repository content, credentials, access tokens, or other personal data.
 
 The current upstream runtime is the ChatGPT desktop application rather than a Codex-only client. Chat, Work, and Codex availability still depends on the OpenAI account, plan, and workspace permissions. OpenAI documents that eligible desktop Work sessions can access local files and folders after the user grants permission; see [`ChatGPT Work and Codex`](https://help.openai.com/en/articles/20001275/).
 
@@ -90,7 +94,7 @@ The rolling [`latest`](https://github.com/newyorkthink/codex-linux/releases/tag/
 | File | Contents | Use when |
 | --- | --- | --- |
 | `codex-desktop-stock-x86_64.AppImage` | **Stock official core**. Byte-for-byte preserves the current official OpenAI Linux package's `resources/app.asar` and retains its Electron runtime and bundled tools; no repository i3bar source patch or runtime replacement is applied. | Upstream has fixed the tray or no repository tray changes are wanted. |
-| `codex-desktop-i3bar-fixed-x86_64.AppImage` | **i3bar Fixed**. Applies the independently maintained and machine-verified tray workaround, then replaces Owl with stock Electron of the same version. | ChatGPT needs a visible tray icon in classic i3bar. |
+| `codex-desktop-i3bar-fixed-x86_64.AppImage` | **i3bar Fixed**. Applies the independently maintained and machine-verified tray workaround, replaces Owl with stock Electron of the same version, and composes an isolated Linux light-theme titlebar compatibility patch. | ChatGPT needs a visible tray icon in classic i3bar or the light-theme top-right window controls need correct contrast. |
 
 “Stock official core” means that official `resources/app.asar` is preserved byte-for-byte and the package's Electron runtime and bundled tools receive no tray-related replacement. The outer Linux AppImage, launcher, icons, and community package identity are still produced by the upstream packaging project. It is **not an OpenAI-official AppImage**, and the complete file is not claimed to be byte-identical to the official `.deb`.
 
@@ -120,15 +124,18 @@ All workaround code is isolated under [`variants/i3bar-fixed/`](variants/i3bar-f
 1. Patch both the current `main-*.js` and `window-all-closed-*.js` bundles for Linux one-argument `Tray` construction, strong retention, readiness fallbacks, and lifecycle.
 2. Replace the Owl runtime that lacks the classic-i3bar GtkStatusIcon/XEmbed backend with stock Electron of the exact same version.
 3. Rebuild `better-sqlite3` and `node-pty` for the stock Electron ABI.
-4. Verify the Electron SHA256, both bundle contracts, both native modules, and all five required `gtk_status_icon_*` symbols before publishing.
+4. Verify the Electron SHA256, both tray bundle contracts, both native modules, and all five required `gtk_status_icon_*` symbols before publishing.
+5. Apply a separate Linux `titleBarOverlay` light-theme compatibility component: dark mode keeps the upstream background, light mode changes only the overlay background to `#ffffff`, while minimize/maximize/close controls remain enabled and `frameless-titlebar` stays disabled.
 
-On 2026-08-15 the Fixed AppImage passed a real Kali Linux + i3wm check: the ChatGPT tray icon appeared in i3bar and its context menu opened normally. See [`TRAY_DEBUG_HISTORY.md`](TRAY_DEBUG_HISTORY.md) for the investigation record.
+The validated tray baseline and the titlebar compatibility layer are kept separate. Existing tray logic remains in `patch.js`; the titlebar component lives under [`components/titlebar-overlay-theme/`](variants/i3bar-fixed/overlay-features/linux-tray-single-arg/components/titlebar-overlay-theme/) and is composed by `combined.js`. If upstream later provides a theme-aware titlebar background, the titlebar component leaves the source byte-identical. If that helper contract drifts or is duplicated, the optional titlebar layer is skipped rather than forcing an old patch onto a new upstream bundle. See [`variants/i3bar-fixed/README.md`](variants/i3bar-fixed/README.md) for the detailed boundaries and retirement behavior.
+
+On 2026-08-15 the Fixed AppImage passed a real Kali Linux + i3wm tray check: the ChatGPT tray icon appeared in i3bar and its context menu opened normally. See [`TRAY_DEBUG_HISTORY.md`](TRAY_DEBUG_HISTORY.md) for the tray investigation record.
 
 ### Automation and upstream-drift protection
 
 GitHub Actions checks upstream `main` every 30 minutes. The same upstream commit is not rebuilt automatically; `workflow_dispatch` may force a rebuild. No `actions/upload-artifact` storage is used, and final packages exist only in the rolling `latest` Release.
 
-Each build first applies only the AppImage launcher isolation to the upstream AppRun template, then builds the Stock AppImage with an empty feature configuration and validates that no repository source patch was applied. The workflow verifies the generated Stock AppImage staging still contains the isolated `CODEX_HOME`. It then enables the Fixed variant only when the official bundle still matches the verified tray contract and Electron remains on the supported major version, and validates the same AppImage-only isolation there as well. If upstream changes or fixes the tray, the old workaround is skipped while Stock still publishes. If the known contract still matches, every Fixed patch, ABI, runtime, and package check remains fail-closed.
+Each build first applies only the AppImage launcher isolation to the upstream AppRun template, then builds the Stock AppImage with an empty feature configuration and validates that no repository source patch was applied. The workflow verifies the generated Stock AppImage staging still contains the isolated `CODEX_HOME`. It enables the Fixed variant only while the official tray bundle still matches the verified tray contract and Electron remains on the supported major version. Inside that Fixed build, the titlebar component evaluates its own helper contract independently: an upstream theme-aware implementation is left byte-identical, while an unknown or duplicate helper shape is skipped with a warning and does not by itself block the validated tray build. If upstream changes or fixes the tray, the old tray workaround is skipped while Stock still publishes. When the known tray contract still matches, tray patch, ABI, runtime, and package validation remains fail-closed.
 
 ### Host impact
 
