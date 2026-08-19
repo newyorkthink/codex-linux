@@ -1,0 +1,13 @@
+#!/bin/sh
+
+# 遇到脚本错误或未定义变量时立即退出，避免继续执行不完整的外链启动
+set -eu
+
+# AppRun 只在 PATH 最前方加入本包装器目录；调用宿主 xdg-open 前恢复原 PATH，避免浏览器继承 AppImage 挂载路径
+case "${PATH:-}" in
+    *:*) PATH=${PATH#*:} ;;
+esac
+export PATH
+
+# 清理当前 ChatGPT/Codex AppImage 的运行时变量后调用宿主 xdg-open，避免冷启动浏览器继承错误的 AppImage 环境
+exec /usr/bin/env -u APPIMAGE -u APPDIR -u ARGV0 -u OWD -u LD_LIBRARY_PATH -u LD_PRELOAD /usr/bin/xdg-open "$@"
