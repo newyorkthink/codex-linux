@@ -13,7 +13,6 @@ on:
       - main
     paths:
       - .github/workflows/build.yml
-      - appimage/**
       - variants/i3bar-fixed/**
   schedule:
     - cron: "17,47 * * * *"
@@ -96,10 +95,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          # 检查 AppImage 专用 xdg-open 包装器语法，避免外链启动修复本身引入无效脚本
-          test -f "$GITHUB_WORKSPACE/appimage/xdg-open"
-          sh -n "$GITHUB_WORKSPACE/appimage/xdg-open"
-
           cd codex-desktop-linux
 
           python3 - <<'PY'
@@ -111,21 +106,16 @@ jobs:
           if source.count(anchor) != 1:
               raise SystemExit("expected exactly one AppImage launcher exec anchor")
 
-          external_open = '''# ChatGPT Desktop AppImage 的外部 URL 优先经过独立 xdg-open 包装器，避免冷启动宿主浏览器继承当前 AppImage 的运行时变量
-          export PATH="$APPDIR/opt/__PACKAGE_NAME__/.codex-linux/host-open:$PATH"
-
-          '''
           isolation = '''# ChatGPT Desktop AppImage 使用独立的 CODEX_HOME，避免与主机 Codex CLI 的 ~/.codex 共用配置、认证和本地状态
           CHATGPT_DESKTOP_CODEX_HOME="${CHATGPT_DESKTOP_CODEX_HOME:-$HOME/.codex-chatgpt-desktop}"
           mkdir -p -- "$CHATGPT_DESKTOP_CODEX_HOME"
           export CODEX_HOME="$CHATGPT_DESKTOP_CODEX_HOME"
 
           '''
-          path.write_text(source.replace(anchor, external_open + isolation + anchor), encoding="utf-8")
+          path.write_text(source.replace(anchor, isolation + anchor), encoding="utf-8")
           PY
 
           bash -n packaging/appimage/AppRun
-          test "$(grep -Fxc 'export PATH="$APPDIR/opt/__PACKAGE_NAME__/.codex-linux/host-open:$PATH"' packaging/appimage/AppRun)" -eq 1
           test "$(grep -Fxc 'CHATGPT_DESKTOP_CODEX_HOME="${CHATGPT_DESKTOP_CODEX_HOME:-$HOME/.codex-chatgpt-desktop}"' packaging/appimage/AppRun)" -eq 1
           test "$(grep -Fxc 'mkdir -p -- "$CHATGPT_DESKTOP_CODEX_HOME"' packaging/appimage/AppRun)" -eq 1
           test "$(grep -Fxc 'export CODEX_HOME="$CHATGPT_DESKTOP_CODEX_HOME"' packaging/appimage/AppRun)" -eq 1
@@ -167,10 +157,6 @@ jobs:
           console.log("Stock patch report: no enabled features or applied patches");
           NODE
 
-          # 只把独立 xdg-open 包装器加入本轮 Stock AppImage staging 源目录，不修改 resources/app.asar
-          install -D -m 0755 "$GITHUB_WORKSPACE/appimage/xdg-open" \
-            codex-app/.codex-linux/host-open/xdg-open
-
           CODEX_LINUX_FEATURES_CONFIG="$STOCK_FEATURES_CONFIG" \
           DIST_DIR_OVERRIDE="$STOCK_DIST_DIR" \
           APPIMAGE_APPDIR_OVERRIDE="$RUNNER_TEMP/codex-stock.AppDir" \
@@ -178,16 +164,7 @@ jobs:
             make appimage
 
           bash -n "$RUNNER_TEMP/codex-stock.AppDir/AppRun"
-          test "$(grep -Fxc 'export PATH="$APPDIR/opt/codex-desktop/.codex-linux/host-open:$PATH"' "$RUNNER_TEMP/codex-stock.AppDir/AppRun")" -eq 1
           test "$(grep -Fxc 'export CODEX_HOME="$CHATGPT_DESKTOP_CODEX_HOME"' "$RUNNER_TEMP/codex-stock.AppDir/AppRun")" -eq 1
-          test -x "$RUNNER_TEMP/codex-stock.AppDir/opt/codex-desktop/.codex-linux/host-open/xdg-open"
-          grep -Fqx 'exec /usr/bin/env -u APPIMAGE -u APPDIR -u ARGV0 -u OWD -u LD_LIBRARY_PATH -u LD_PRELOAD /usr/bin/xdg-open "$@"' \
-            "$RUNNER_TEMP/codex-stock.AppDir/opt/codex-desktop/.codex-linux/host-open/xdg-open"
-
-          # AppImage 生成后移除工作 payload 中的 AppImage 专用包装器，保持后续上游合同检测使用原始应用目录
-          rm -f codex-app/.codex-linux/host-open/xdg-open
-          rmdir codex-app/.codex-linux/host-open
-          test ! -e codex-app/.codex-linux/host-open
 
           mapfile -t stock_images < <(find "$STOCK_DIST_DIR" -maxdepth 1 -type f -name '*.AppImage' -print)
           test "${#stock_images[@]}" -eq 1
@@ -253,10 +230,6 @@ jobs:
           "$FIXED_ROOT/scripts/install-stock-electron-runtime.sh" codex-app
           test -f codex-app/.codex-linux/stock-electron-runtime.json
 
-          # 只把独立 xdg-open 包装器加入本轮 i3bar Fixed AppImage staging 源目录，不让原生包继承该文件
-          install -D -m 0755 "$GITHUB_WORKSPACE/appimage/xdg-open" \
-            codex-app/.codex-linux/host-open/xdg-open
-
           CODEX_LINUX_FEATURES_CONFIG="$I3BAR_FIXED_FEATURES_CONFIG" \
           DIST_DIR_OVERRIDE="$I3BAR_FIXED_DIST_DIR" \
           APPIMAGE_APPDIR_OVERRIDE="$RUNNER_TEMP/codex-i3bar-fixed.AppDir" \
@@ -264,24 +237,13 @@ jobs:
             make appimage
 
           bash -n "$RUNNER_TEMP/codex-i3bar-fixed.AppDir/AppRun"
-          test "$(grep -Fxc 'export PATH="$APPDIR/opt/codex-desktop/.codex-linux/host-open:$PATH"' "$RUNNER_TEMP/codex-i3bar-fixed.AppDir/AppRun")" -eq 1
           test "$(grep -Fxc 'export CODEX_HOME="$CHATGPT_DESKTOP_CODEX_HOME"' "$RUNNER_TEMP/codex-i3bar-fixed.AppDir/AppRun")" -eq 1
-          test -x "$RUNNER_TEMP/codex-i3bar-fixed.AppDir/opt/codex-desktop/.codex-linux/host-open/xdg-open"
-          grep -Fqx 'exec /usr/bin/env -u APPIMAGE -u APPDIR -u ARGV0 -u OWD -u LD_LIBRARY_PATH -u LD_PRELOAD /usr/bin/xdg-open "$@"' \
-            "$RUNNER_TEMP/codex-i3bar-fixed.AppDir/opt/codex-desktop/.codex-linux/host-open/xdg-open"
-
-          # AppImage 生成后移除工作 payload 中的 AppImage 专用包装器，确保 DEB、RPM 和 Arch 原生包保持原有行为
-          rm -f codex-app/.codex-linux/host-open/xdg-open
-          rmdir codex-app/.codex-linux/host-open
-          test ! -e codex-app/.codex-linux/host-open
 
           CODEX_LINUX_FEATURES_CONFIG="$I3BAR_FIXED_FEATURES_CONFIG" \
           DIST_DIR_OVERRIDE="$I3BAR_FIXED_DIST_DIR" \
           PKG_ROOT_OVERRIDE="$RUNNER_TEMP/codex-i3bar-fixed-deb-root" \
           PACKAGE_VERSION="$PACKAGE_VERSION" \
             make deb
-
-          test ! -e "$RUNNER_TEMP/codex-i3bar-fixed-deb-root/opt/codex-desktop/.codex-linux/host-open/xdg-open"
 
           CODEX_LINUX_FEATURES_CONFIG="$I3BAR_FIXED_FEATURES_CONFIG" \
           DIST_DIR_OVERRIDE="$I3BAR_FIXED_DIST_DIR" \
@@ -436,7 +398,6 @@ jobs:
 
           AppImage configuration:
           - Both AppImage variants use an isolated \`CODEX_HOME=\$HOME/.codex-chatgpt-desktop\` so ChatGPT Desktop does not share the host Codex CLI's \`~/.codex\` configuration and local state.
-          - Both AppImage variants route external URLs through an AppImage-only \`xdg-open\` wrapper that clears \`APPIMAGE\`, \`APPDIR\`, \`ARGV0\`, \`OWD\`, \`LD_LIBRARY_PATH\`, and \`LD_PRELOAD\` before calling the host \`/usr/bin/xdg-open\`, preventing cold-started host browsers from inheriting the ChatGPT AppImage environment.
           - Set \`CHATGPT_DESKTOP_CODEX_HOME=/path/to/directory\` only when a different Desktop-only location is intentionally required.
 
           DEB, RPM and Arch packages use the i3bar Fixed variant when that verified workaround is applicable. Their upstream native \`CODEX_HOME\` and external-URL behavior are unchanged.
