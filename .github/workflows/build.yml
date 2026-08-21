@@ -419,10 +419,10 @@ jobs:
           AppImage variants:
           - \`codex-desktop-stock-x86_64.AppImage\`: byte-for-byte official \`resources/app.asar\` plus the package's Electron runtime and bundled tools, with no i3bar source overlay or runtime replacement; the outer AppImage is community-packaged.
           - \`codex-desktop-i3bar-fixed-x86_64.AppImage\`: isolated i3bar workaround; patches both tray bundle locations, replaces Owl with matching stock Electron, rebuilds better-sqlite3 and node-pty, and verifies GtkStatusIcon/XEmbed. $FIXED_NOTE
-          - \`chatgpt-desktop.AppImage\`: repackaged directly from OpenAI's official Linux amd64 DEB with quick-sharun; no account data, credentials, proxy settings, personal paths, or custom \`CODEX_HOME\` are embedded.
+          - \`chatgpt-desktop.AppImage\`: repackaged directly from OpenAI's official Linux amd64 DEB with quick-sharun; uses the same isolated \`CODEX_HOME=\$HOME/.codex-chatgpt-desktop\` as the other Desktop AppImages; no account data, credentials, proxy settings, or personal paths are embedded.
 
           AppImage configuration:
-          - Both Codex AppImage variants use an isolated \`CODEX_HOME=\$HOME/.codex-chatgpt-desktop\` so ChatGPT Desktop does not share the host Codex CLI's \`~/.codex\` configuration and local state.
+          - All three AppImage variants use an isolated \`CODEX_HOME=\$HOME/.codex-chatgpt-desktop\` so ChatGPT Desktop does not share the host Codex CLI's \`~/.codex\` configuration and local state.
           - Set \`CHATGPT_DESKTOP_CODEX_HOME=/path/to/directory\` only when a different Desktop-only location is intentionally required.
 
           DEB, RPM and Arch packages use the i3bar Fixed variant when that verified workaround is applicable. Their upstream native \`CODEX_HOME\` and external-URL behavior are unchanged.
