@@ -124,35 +124,20 @@ quick-sharun \
   /usr/lib/pkcs11/* \
   /usr/lib/gtk-3.0/3.0.0/immodules/im-ibus.so
 
-# 在 quick-sharun 生成的 AppRun.sh 中加入 Desktop 专用 CODEX_HOME；
-# 只修改 AppImage 外层启动器，不修改官方 resources/app.asar 或应用代码。
+# 官方 DEB 直封版保留上游原生 CODEX_HOME、认证和本地服务状态行为；
+# 不在 AppImage 外层注入 Desktop 专用 CODEX_HOME，避免改变 ChatGPT Desktop 的 Voice / Realtime 认证链路。
 APP_RUN=./AppDir/AppRun.sh
-APP_RUN_TMP=./AppDir/AppRun.sh.tmp
-APP_RUN_ANCHOR='# Check if ARG0 matches a binary, fallback to $1, then binary in .desktop'
-
-if [[ "$(grep -Fxc "$APP_RUN_ANCHOR" "$APP_RUN")" -ne 1 ]]; then
-  echo "Error: unexpected quick-sharun AppRun.sh structure."
+if [[ ! -f "$APP_RUN" ]]; then
+  echo "Error: quick-sharun AppRun.sh was not created."
   exit 1
 fi
 
-awk -v anchor="$APP_RUN_ANCHOR" '
-  $0 == anchor {
-    print "# ChatGPT Desktop AppImage 使用独立的 CODEX_HOME，避免与主机 Codex CLI 的 ~/.codex 共用配置、认证和本地状态"
-    print "CHATGPT_DESKTOP_CODEX_HOME=\"${CHATGPT_DESKTOP_CODEX_HOME:-$HOME/.codex-chatgpt-desktop}\""
-    print "mkdir -p -- \"$CHATGPT_DESKTOP_CODEX_HOME\""
-    print "export CODEX_HOME=\"$CHATGPT_DESKTOP_CODEX_HOME\""
-    print ""
-  }
-  { print }
-' "$APP_RUN" > "$APP_RUN_TMP"
-
-mv "$APP_RUN_TMP" "$APP_RUN"
-chmod +x "$APP_RUN"
-
 sh -n "$APP_RUN"
-test "$(grep -Fxc 'CHATGPT_DESKTOP_CODEX_HOME="${CHATGPT_DESKTOP_CODEX_HOME:-$HOME/.codex-chatgpt-desktop}"' "$APP_RUN")" -eq 1
-test "$(grep -Fxc 'mkdir -p -- "$CHATGPT_DESKTOP_CODEX_HOME"' "$APP_RUN")" -eq 1
-test "$(grep -Fxc 'export CODEX_HOME="$CHATGPT_DESKTOP_CODEX_HOME"' "$APP_RUN")" -eq 1
+
+if grep -Fq 'CHATGPT_DESKTOP_CODEX_HOME' "$APP_RUN" || grep -Fq '.codex-chatgpt-desktop' "$APP_RUN"; then
+  echo "Error: ChatGPT Desktop AppImage must not inject a custom CODEX_HOME."
+  exit 1
+fi
 
 quick-sharun --make-appimage
 
