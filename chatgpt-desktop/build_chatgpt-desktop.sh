@@ -40,6 +40,8 @@ export APPNAME=ChatGPT
 export STARTUPWMCLASS=Chatgpt
 export OUTPATH=./dist
 export OUTNAME="chatgpt-desktop.AppImage"
+# 固定 AppImage 主入口为官方 ChatGPT Electron 主程序，与已验证的 Stock / i3bar Fixed 启动链保持一致。
+export MAIN_BIN=ChatGPT
 export DEPLOY_GTK=1
 export DEPLOY_OPENGL=1
 export DEPLOY_VULKAN=1
@@ -103,8 +105,12 @@ cp -a "$DEB_ROOT/usr/lib/chatgpt/." ./AppDir/bin/
 cp -a "$DEB_ROOT/usr/share/applications/chatgpt.desktop" ./AppDir/share/applications/chatgpt.desktop
 cp -a "$DEB_ROOT/usr/share/pixmaps/chatgpt.png" ./AppDir/share/pixmaps/chatgpt.png
 
-# 官方 DEB 的 /usr/bin/chatgpt 指向 codex-launcher；AppImage 内应用目录平铺到 bin 后保持同一入口关系。
-ln -sfn codex-launcher ./AppDir/bin/chatgpt
+# 官方 DEB 的 /usr/bin/chatgpt 指向 codex-launcher；AppImage 继续保留 codex-launcher 文件，
+# 但入口名称 chatgpt 改为直接进入 ChatGPT 主程序，复用已验证的 Stock / i3bar Fixed 启动链。
+ln -sfn ChatGPT ./AppDir/bin/chatgpt
+
+test "$(readlink ./AppDir/bin/chatgpt)" = "ChatGPT"
+test -x ./AppDir/bin/codex-launcher
 
 export DESKTOP=./AppDir/share/applications/chatgpt.desktop
 export ICON=./AppDir/share/pixmaps/chatgpt.png
@@ -113,7 +119,8 @@ export ICON=./AppDir/share/pixmaps/chatgpt.png
 OFFICIAL_ASAR_SHA256="$(sha256sum ./AppDir/bin/resources/app.asar | awk '{print $1}')"
 
 # 使用与 linux-packaging 中 VS Code / Cursor 相同的 quick-sharun 路线。
-# 只把官方入口与 Electron 主程序作为应用部署根节点；resources 中的可选 musl/Qt 组件保持原样，不做手工 ELF 扫描。
+# 只把 AppImage 直达的 ChatGPT 主程序作为主入口；codex-launcher 保留在包内但不参与 AppImage 启动链。
+# resources 中的可选 musl/Qt 组件保持原样，不做手工 ELF 扫描。
 quick-sharun \
   ./AppDir/bin/chatgpt \
   ./AppDir/bin/ChatGPT \
@@ -123,6 +130,14 @@ quick-sharun \
   /usr/lib/libfreeblpriv3.so \
   /usr/lib/pkcs11/* \
   /usr/lib/gtk-3.0/3.0.0/immodules/im-ibus.so
+
+# quick-sharun 会把 AppRun.sh 的默认启动目标写入 MAIN_BIN；必须保持为 ChatGPT，不能回退到 codex-launcher。
+test "$(grep -Fxc 'MAIN_BIN=ChatGPT' ./AppDir/AppRun.sh)" -eq 1
+
+if [[ ! -L ./AppDir/shared/bin/chatgpt ]] || [[ "$(readlink ./AppDir/shared/bin/chatgpt)" != "ChatGPT" ]]; then
+  echo "Error: AppImage chatgpt entry no longer resolves directly to ChatGPT."
+  exit 1
+fi
 
 # 在 quick-sharun 生成的 AppRun.sh 中加入 Desktop 专用 CODEX_HOME；
 # 只修改 AppImage 外层启动器，不修改官方 resources/app.asar 或应用代码。
@@ -150,6 +165,7 @@ mv "$APP_RUN_TMP" "$APP_RUN"
 chmod +x "$APP_RUN"
 
 sh -n "$APP_RUN"
+test "$(grep -Fxc 'MAIN_BIN=ChatGPT' "$APP_RUN")" -eq 1
 test "$(grep -Fxc 'CHATGPT_DESKTOP_CODEX_HOME="${CHATGPT_DESKTOP_CODEX_HOME:-$HOME/.codex-chatgpt-desktop}"' "$APP_RUN")" -eq 1
 test "$(grep -Fxc 'mkdir -p -- "$CHATGPT_DESKTOP_CODEX_HOME"' "$APP_RUN")" -eq 1
 test "$(grep -Fxc 'export CODEX_HOME="$CHATGPT_DESKTOP_CODEX_HOME"' "$APP_RUN")" -eq 1
