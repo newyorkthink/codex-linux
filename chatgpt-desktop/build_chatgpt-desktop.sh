@@ -152,9 +152,10 @@ LINUXDEPLOY_ARGS=(
   --executable "$INSTALLED_CHATGPT_ROOT/codex-launcher"
 )
 
-# 扫描官方应用中的 ELF/Node 原生模块，把它们依赖到的系统运行库作为部署根节点；不复制或重写这些官方模块本身。
+# linuxdeploy 负责主程序和 codex-launcher 的依赖；这里只额外解析 Electron 动态加载的 Node 原生模块。
+# 不遍历官方目录中的所有 ELF：其中可能包含可选 Qt 组件或自带 musl 运行时的辅助程序，它们不是主程序的硬依赖。
 LIB_LIST="$TMP_ROOT/runtime-libs.txt"
-MISSING_LIST="$TMP_ROOT/missing-libs.txt"
+MISSING_LIST="$TMP_ROOT/missing-node-libs.txt"
 : > "$LIB_LIST"
 : > "$MISSING_LIST"
 
@@ -165,15 +166,13 @@ while IFS= read -r -d '' native_file; do
   ldd "$native_file" 2>/dev/null \
     | awk '/=> \/[^ ]+/ {print $3} /^[[:space:]]*\/[^ ]+[[:space:]]+\(/ {print $1}' \
     >> "$LIB_LIST" || true
-done < <(find "$INSTALLED_CHATGPT_ROOT" -type f \
-  \( -perm -0100 -o -name '*.node' -o -name '*.so' -o -name '*.so.*' \) \
-  -print0)
+done < <(find "$INSTALLED_CHATGPT_ROOT" -type f -name '*.node' -print0)
 
 sort -u -o "$LIB_LIST" "$LIB_LIST"
 sort -u -o "$MISSING_LIST" "$MISSING_LIST"
 if [[ -s "$MISSING_LIST" ]]; then
   cat "$MISSING_LIST" >&2
-  die "官方 DEB 安装后仍存在未解析的 ELF 运行库。"
+  die "官方 Electron Node 原生模块仍存在未解析的运行库。"
 fi
 
 while IFS= read -r runtime_lib; do
