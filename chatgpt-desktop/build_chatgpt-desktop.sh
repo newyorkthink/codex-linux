@@ -1,258 +1,148 @@
 #!/usr/bin/env bash
-# 将 OpenAI 官方 Linux amd64 DEB 重新封装为 AppImage；官方应用目录和 resources/app.asar 不做源码修改。
+# 将 OpenAI 官方 Linux amd64 DEB 直接重新封装为 AppImage；应用资源使用官方 DEB 原文件。
 set -Eeuo pipefail
 
-readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-readonly OFFICIAL_DEB_URL="${CHATGPT_DEB_URL:-https://persistent.oaistatic.com/codex-app-prod/linux/deb/latest/chatgpt_amd64.deb}"
-readonly BUILD_IMAGE="${CHATGPT_BUILD_IMAGE:-ubuntu:24.04}"
+OFFICIAL_DEB_URL="${CHATGPT_DEB_URL:-https://persistent.oaistatic.com/codex-app-prod/linux/deb/latest/chatgpt_amd64.deb}"
+DEB_FILE=/tmp/chatgpt_amd64.deb
+DEB_ROOT=/tmp/chatgpt-deb-root
 
-log() {
-  printf '[ChatGPT Desktop] %s\n' "$*"
-}
-
-die() {
-  printf '错误：%s\n' "$*" >&2
+ARCH="$(uname -m)"
+if [[ "$ARCH" != "x86_64" ]]; then
+  echo "Error: this script only supports x86_64 / amd64."
   exit 1
-}
+fi
+export ARCH
 
-[[ "$(uname -m)" == "x86_64" ]] || die "当前构建仅支持 x86_64 / amd64。"
-[[ "$OFFICIAL_DEB_URL" == https://persistent.oaistatic.com/codex-app-prod/linux/deb/* ]] || \
-  die "CHATGPT_DEB_URL 必须指向 OpenAI 官方 persistent.oaistatic.com Linux DEB 路径。"
-command -v docker >/dev/null 2>&1 || die "未找到 Docker。"
-docker info >/dev/null 2>&1 || die "Docker daemon 不可用。"
-
-rm -rf "$SCRIPT_DIR/AppDir" "$SCRIPT_DIR/dist"
-mkdir -p "$SCRIPT_DIR/dist"
-
-log "使用隔离构建环境：$BUILD_IMAGE"
-docker run --rm -i \
-  -v "$SCRIPT_DIR:/work" \
-  -w /work \
-  -e OFFICIAL_DEB_URL="$OFFICIAL_DEB_URL" \
-  -e HOST_UID="$(id -u)" \
-  -e HOST_GID="$(id -g)" \
-  "$BUILD_IMAGE" \
-  bash -s <<'INNER_EOF'
-set -Eeuo pipefail
-
-export DEBIAN_FRONTEND=noninteractive
-export APPIMAGE_EXTRACT_AND_RUN=1
-export ARCH=x86_64
-export LANG=C.UTF-8
-export LC_ALL=C.UTF-8
-
-readonly ROOT=/work
-readonly APPDIR="$ROOT/AppDir"
-readonly OUTDIR="$ROOT/dist"
-readonly OUTFILE="$OUTDIR/chatgpt-desktop.AppImage"
-readonly TMP_ROOT="$(mktemp -d)"
-readonly DEB_FILE="$TMP_ROOT/chatgpt_amd64.deb"
-readonly DESKTOP_COPY="$TMP_ROOT/chatgpt.desktop"
-readonly ICON_COPY="$TMP_ROOT/chatgpt.png"
-trap 'rm -rf "$TMP_ROOT"' EXIT
-
-log() {
-  printf '[ChatGPT Desktop] %s\n' "$*"
-}
-
-die() {
-  printf '错误：%s\n' "$*" >&2
+if [[ "$OFFICIAL_DEB_URL" != https://persistent.oaistatic.com/codex-app-prod/linux/deb/* ]]; then
+  echo "Error: CHATGPT_DEB_URL must use OpenAI's persistent.oaistatic.com Linux DEB repository."
   exit 1
-}
+fi
 
-apt-get update
-apt-get install -y --no-install-recommends \
-  binutils \
-  ca-certificates \
-  coreutils \
-  curl \
-  desktop-file-utils \
-  dpkg-dev \
-  file \
-  findutils \
-  gawk \
-  grep \
-  libglib2.0-bin \
-  patchelf \
-  sed \
-  squashfs-tools \
-  tar \
-  xz-utils \
-  zstd
+rm -rf ./AppDir ./dist "$DEB_ROOT"
+rm -f "$DEB_FILE"
 
-log "下载 OpenAI 官方 DEB"
-curl --fail --location --retry 5 --retry-all-errors --proto '=https' \
-  "$OFFICIAL_DEB_URL" -o "$DEB_FILE"
-test -s "$DEB_FILE" || die "官方 DEB 下载结果为空。"
+# 安装基础打包工具和依赖。
+yay -S --noconfirm gcc base-devel curl wget tar gzip xz zstd binutils dpkg patchelf coreutils \
+  appstream-glib desktop-file-utils util-linux zsync \
+  xorg-server xorg-server-common xorg-server-xvfb
+
+# 安装 ChatGPT Desktop / Electron 运行相关依赖，供 quick-sharun 收集运行库。
+yay -S --noconfirm at-spi2-core alsa-lib cairo cups dbus expat glib2 gtk3 libnotify libsecret \
+  libdrm libusb mesa nspr nss pango systemd-libs xdg-utils \
+  libx11 libxcb libxcomposite libxdamage libxext libxfixes libxi libxkbcommon libxrandr \
+  libxrender libxss libxtst \
+  libglvnd libva libvdpau pulseaudio pulseaudio-alsa pipewire-audio ibus inetutils
+
+export APPNAME=ChatGPT
+export STARTUPWMCLASS=Chatgpt
+export OUTPATH=./dist
+export OUTNAME="chatgpt-desktop.AppImage"
+export DEPLOY_GTK=1
+export DEPLOY_OPENGL=1
+export DEPLOY_VULKAN=1
+export DEPLOY_PIPEWIRE=1
+
+# 下载 OpenAI 官方 ChatGPT Desktop amd64 DEB。
+wget --retry-connrefused --tries=30 "$OFFICIAL_DEB_URL" -O "$DEB_FILE"
 
 PACKAGE_NAME="$(dpkg-deb -f "$DEB_FILE" Package)"
 PACKAGE_VERSION="$(dpkg-deb -f "$DEB_FILE" Version)"
 PACKAGE_ARCH="$(dpkg-deb -f "$DEB_FILE" Architecture)"
-[[ "$PACKAGE_NAME" == "chatgpt" ]] || die "官方 DEB Package 字段异常：$PACKAGE_NAME"
-[[ "$PACKAGE_ARCH" == "amd64" ]] || die "官方 DEB Architecture 字段异常：$PACKAGE_ARCH"
-[[ -n "$PACKAGE_VERSION" ]] || die "无法读取 ChatGPT Desktop 版本。"
+
+if [[ "$PACKAGE_NAME" != "chatgpt" ]]; then
+  echo "Error: unexpected DEB package name: $PACKAGE_NAME"
+  exit 1
+fi
+
+if [[ "$PACKAGE_ARCH" != "amd64" ]]; then
+  echo "Error: unexpected DEB architecture: $PACKAGE_ARCH"
+  exit 1
+fi
+
+if [[ -z "$PACKAGE_VERSION" ]]; then
+  echo "Error: failed to read ChatGPT Desktop version."
+  exit 1
+fi
+
 DEB_SHA256="$(sha256sum "$DEB_FILE" | awk '{print $1}')"
+echo "ChatGPT Desktop version: $PACKAGE_VERSION"
 
-# 在一次性 Ubuntu 24.04 容器中安装同一官方 DEB，仅用于让 linuxdeploy 解析官方声明的系统依赖。
-apt-get install -y --no-install-recommends "$DEB_FILE"
+# 解包官方 DEB；只重新排列 AppImage 目录，不修改官方应用源码或 resources/app.asar。
+mkdir -p "$DEB_ROOT" ./AppDir/bin ./AppDir/share/applications ./AppDir/share/pixmaps ./dist
+dpkg-deb -x "$DEB_FILE" "$DEB_ROOT"
 
-rm -rf "$APPDIR"
-mkdir -p "$APPDIR" "$OUTDIR"
-dpkg-deb -x "$DEB_FILE" "$APPDIR"
-
-readonly CHATGPT_ROOT="$APPDIR/usr/lib/chatgpt"
-readonly INSTALLED_CHATGPT_ROOT=/usr/lib/chatgpt
-readonly CHATGPT_BINARY="$CHATGPT_ROOT/ChatGPT"
-readonly CODEX_LAUNCHER="$CHATGPT_ROOT/codex-launcher"
-readonly APP_ASAR="$CHATGPT_ROOT/resources/app.asar"
-readonly OFFICIAL_DESKTOP="$APPDIR/usr/share/applications/chatgpt.desktop"
-
-[[ -x "$CHATGPT_BINARY" ]] || die "官方 DEB 中缺少 /usr/lib/chatgpt/ChatGPT。"
-[[ -x "$CODEX_LAUNCHER" ]] || die "官方 DEB 中缺少 /usr/lib/chatgpt/codex-launcher。"
-[[ -f "$APP_ASAR" ]] || die "官方 DEB 中缺少 resources/app.asar。"
-[[ -f "$OFFICIAL_DESKTOP" ]] || die "官方 DEB 中缺少 chatgpt.desktop。"
-
-OFFICIAL_ICON="$APPDIR/usr/share/pixmaps/chatgpt.png"
-if [[ ! -f "$OFFICIAL_ICON" ]]; then
-  OFFICIAL_ICON="$(find "$APPDIR/usr/share/icons" -type f -iname 'chatgpt*.png' -print | sort -V | tail -n1 || true)"
-fi
-[[ -n "$OFFICIAL_ICON" && -f "$OFFICIAL_ICON" ]] || die "官方 DEB 中找不到 ChatGPT PNG 图标。"
-
-ASAR_SHA256_BEFORE="$(sha256sum "$APP_ASAR" | awk '{print $1}')"
-CHATGPT_BINARY_SHA256_BEFORE="$(sha256sum "$CHATGPT_BINARY" | awk '{print $1}')"
-CODEX_LAUNCHER_SHA256_BEFORE="$(sha256sum "$CODEX_LAUNCHER" | awk '{print $1}')"
-
-cp -a "$OFFICIAL_DESKTOP" "$DESKTOP_COPY"
-cp -a "$OFFICIAL_ICON" "$ICON_COPY"
-
-# 仅调整 AppImage 外层 desktop 入口；不改官方应用代码、认证逻辑、代理设置或 CODEX_HOME。
-sed -i -E \
-  -e 's|^Exec=.*$|Exec=chatgpt %U|' \
-  -e 's|^Icon=.*$|Icon=chatgpt|' \
-  "$DESKTOP_COPY"
-if ! grep -q '^StartupWMClass=' "$DESKTOP_COPY"; then
-  printf '%s\n' 'StartupWMClass=Chatgpt' >> "$DESKTOP_COPY"
+if [[ ! -x "$DEB_ROOT/usr/lib/chatgpt/ChatGPT" ]]; then
+  echo "Error: official ChatGPT executable not found."
+  exit 1
 fi
 
-curl --fail --location --retry 5 --retry-all-errors \
-  https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage \
-  -o "$TMP_ROOT/linuxdeploy"
-curl --fail --location --retry 5 --retry-all-errors \
-  https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage \
-  -o "$TMP_ROOT/appimagetool"
-chmod +x "$TMP_ROOT/linuxdeploy" "$TMP_ROOT/appimagetool"
-
-LINUXDEPLOY_ARGS=(
-  --appdir "$APPDIR"
-  --desktop-file "$DESKTOP_COPY"
-  --icon-file "$ICON_COPY"
-  --executable "$INSTALLED_CHATGPT_ROOT/ChatGPT"
-  --executable "$INSTALLED_CHATGPT_ROOT/codex-launcher"
-)
-
-# linuxdeploy 负责主程序和 codex-launcher 的依赖；这里只额外解析 Electron 动态加载的 Node 原生模块。
-# 不遍历官方目录中的所有 ELF：其中可能包含可选 Qt 组件或自带 musl 运行时的辅助程序，它们不是主程序的硬依赖。
-LIB_LIST="$TMP_ROOT/runtime-libs.txt"
-MISSING_LIST="$TMP_ROOT/missing-node-libs.txt"
-: > "$LIB_LIST"
-: > "$MISSING_LIST"
-
-while IFS= read -r -d '' native_file; do
-  file -b "$native_file" | grep -q 'ELF' || continue
-  ldd "$native_file" 2>/dev/null \
-    | awk '/=> not found/ {print $1}' >> "$MISSING_LIST" || true
-  ldd "$native_file" 2>/dev/null \
-    | awk '/=> \/[^ ]+/ {print $3} /^[[:space:]]*\/[^ ]+[[:space:]]+\(/ {print $1}' \
-    >> "$LIB_LIST" || true
-done < <(find "$INSTALLED_CHATGPT_ROOT" -type f -name '*.node' -print0)
-
-sort -u -o "$LIB_LIST" "$LIB_LIST"
-sort -u -o "$MISSING_LIST" "$MISSING_LIST"
-if [[ -s "$MISSING_LIST" ]]; then
-  cat "$MISSING_LIST" >&2
-  die "官方 Electron Node 原生模块仍存在未解析的运行库。"
+if [[ ! -x "$DEB_ROOT/usr/lib/chatgpt/codex-launcher" ]]; then
+  echo "Error: official codex-launcher not found."
+  exit 1
 fi
 
-while IFS= read -r runtime_lib; do
-  [[ -f "$runtime_lib" ]] && LINUXDEPLOY_ARGS+=(--library "$runtime_lib")
-done < "$LIB_LIST"
-
-# NSS/Secret Service 等组件可能由 Chromium 在运行时动态加载，存在时显式加入部署集合。
-for runtime_name in \
-  libfreeblpriv3.so \
-  libnssckbi.so \
-  libsecret-1.so.0 \
-  libsoftokn3.so; do
-  runtime_path="$(ldconfig -p 2>/dev/null | awk -v name="$runtime_name" '$1 == name {print $NF; exit}')"
-  [[ -n "$runtime_path" && -f "$runtime_path" ]] && LINUXDEPLOY_ARGS+=(--library "$runtime_path")
-done
-
-log "使用 linuxdeploy 补齐运行依赖"
-NO_STRIP=1 "$TMP_ROOT/linuxdeploy" "${LINUXDEPLOY_ARGS[@]}"
-
-ASAR_SHA256_AFTER="$(sha256sum "$APP_ASAR" | awk '{print $1}')"
-CHATGPT_BINARY_SHA256_AFTER="$(sha256sum "$CHATGPT_BINARY" | awk '{print $1}')"
-CODEX_LAUNCHER_SHA256_AFTER="$(sha256sum "$CODEX_LAUNCHER" | awk '{print $1}')"
-[[ "$ASAR_SHA256_BEFORE" == "$ASAR_SHA256_AFTER" ]] || \
-  die "linuxdeploy 意外修改了官方 resources/app.asar。"
-[[ "$CHATGPT_BINARY_SHA256_BEFORE" == "$CHATGPT_BINARY_SHA256_AFTER" ]] || \
-  die "linuxdeploy 意外修改了官方 ChatGPT 主程序。"
-[[ "$CODEX_LAUNCHER_SHA256_BEFORE" == "$CODEX_LAUNCHER_SHA256_AFTER" ]] || \
-  die "linuxdeploy 意外修改了官方 codex-launcher。"
-
-cat > "$APPDIR/AppRun" <<'APPRUN_EOF'
-#!/usr/bin/env bash
-set -e
-
-APPDIR="$(dirname "$(readlink -f "$0")")"
-export APPDIR
-export PATH="$APPDIR/usr/bin:${PATH:-/usr/bin:/bin}"
-export XDG_DATA_DIRS="$APPDIR/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
-
-LIB_PATH="$APPDIR/usr/lib:$APPDIR/usr/lib/x86_64-linux-gnu"
-if [[ -n "${LD_LIBRARY_PATH:-}" ]]; then
-  LIB_PATH="$LIB_PATH:$LD_LIBRARY_PATH"
+if [[ ! -f "$DEB_ROOT/usr/lib/chatgpt/resources/app.asar" ]]; then
+  echo "Error: official resources/app.asar not found."
+  exit 1
 fi
-export LD_LIBRARY_PATH="$LIB_PATH"
 
-exec "$APPDIR/usr/lib/chatgpt/codex-launcher" "$@"
-APPRUN_EOF
-chmod +x "$APPDIR/AppRun"
+if [[ ! -f "$DEB_ROOT/usr/share/applications/chatgpt.desktop" ]]; then
+  echo "Error: official chatgpt.desktop not found."
+  exit 1
+fi
 
-rm -f "$OUTFILE"
-log "生成 AppImage"
-"$TMP_ROOT/appimagetool" "$APPDIR" "$OUTFILE"
-[[ -s "$OUTFILE" ]] || die "AppImage 构建失败。"
+if [[ ! -f "$DEB_ROOT/usr/share/pixmaps/chatgpt.png" ]]; then
+  echo "Error: official chatgpt.png not found."
+  exit 1
+fi
 
-# 再从最终 AppImage 解包一次，确认封装后的官方 app.asar 仍与输入 DEB 完全一致。
-FINAL_EXTRACT_DIR="$TMP_ROOT/final-extract"
-mkdir -p "$FINAL_EXTRACT_DIR"
-pushd "$FINAL_EXTRACT_DIR" >/dev/null
-"$OUTFILE" --appimage-extract >/dev/null
-popd >/dev/null
-FINAL_APP_ASAR="$FINAL_EXTRACT_DIR/squashfs-root/usr/lib/chatgpt/resources/app.asar"
-[[ -f "$FINAL_APP_ASAR" ]] || die "最终 AppImage 中缺少 resources/app.asar。"
-FINAL_ASAR_SHA256="$(sha256sum "$FINAL_APP_ASAR" | awk '{print $1}')"
-[[ "$ASAR_SHA256_BEFORE" == "$FINAL_ASAR_SHA256" ]] || \
-  die "最终 AppImage 中的 resources/app.asar 与官方 DEB 不一致。"
+cp -a "$DEB_ROOT/usr/lib/chatgpt/." ./AppDir/bin/
+cp -a "$DEB_ROOT/usr/share/applications/chatgpt.desktop" ./AppDir/share/applications/chatgpt.desktop
+cp -a "$DEB_ROOT/usr/share/pixmaps/chatgpt.png" ./AppDir/share/pixmaps/chatgpt.png
 
-APPIMAGE_SHA256="$(sha256sum "$OUTFILE" | awk '{print $1}')"
-printf '%s\n' "$PACKAGE_VERSION" > "$OUTDIR/version.txt"
-printf '%s  %s\n' "$DEB_SHA256" 'chatgpt_amd64.deb' > "$OUTDIR/official-deb.sha256"
-printf '%s  %s\n' "$ASAR_SHA256_AFTER" 'resources/app.asar' > "$OUTDIR/official-app-asar.sha256"
-printf '%s  %s\n' "$APPIMAGE_SHA256" "$(basename "$OUTFILE")" > "$OUTDIR/SHA256SUMS.txt"
+# 官方 DEB 的 /usr/bin/chatgpt 指向 codex-launcher；AppImage 内应用目录平铺到 bin 后保持同一入口关系。
+ln -sfn codex-launcher ./AppDir/bin/chatgpt
 
-# AppDir 只是中间目录，不保留在工作区；Release 只上传最终 AppImage 与校验文件。
-rm -rf "$APPDIR"
-chown -R "$HOST_UID:$HOST_GID" "$OUTDIR"
+export DESKTOP=./AppDir/share/applications/chatgpt.desktop
+export ICON=./AppDir/share/pixmaps/chatgpt.png
 
-log "版本：$PACKAGE_VERSION"
-log "官方 DEB SHA256：$DEB_SHA256"
-log "官方 app.asar SHA256：$ASAR_SHA256_AFTER"
-log "AppImage SHA256：$APPIMAGE_SHA256"
-INNER_EOF
+ASAR_SHA256_BEFORE="$(sha256sum ./AppDir/bin/resources/app.asar | awk '{print $1}')"
 
-[[ -s "$SCRIPT_DIR/dist/chatgpt-desktop.AppImage" ]] || die "最终 AppImage 不存在或为空。"
-log "构建完成：$SCRIPT_DIR/dist/chatgpt-desktop.AppImage"
+# 使用与 linux-packaging 中 VS Code / Cursor 相同的 quick-sharun 路线。
+# 只把官方入口与 Electron 主程序作为应用部署根节点；resources 中的可选 musl/Qt 组件保持原样，不做手工 ELF 扫描。
+quick-sharun \
+  ./AppDir/bin/chatgpt \
+  ./AppDir/bin/ChatGPT \
+  /usr/bin/hostname \
+  /usr/lib/libnss* \
+  /usr/lib/libsoftokn3.so \
+  /usr/lib/libfreeblpriv3.so \
+  /usr/lib/pkcs11/* \
+  /usr/lib/gtk-3.0/3.0.0/immodules/im-ibus.so
+
+ASAR_SHA256_AFTER="$(sha256sum ./AppDir/bin/resources/app.asar | awk '{print $1}')"
+if [[ "$ASAR_SHA256_BEFORE" != "$ASAR_SHA256_AFTER" ]]; then
+  echo "Error: resources/app.asar changed during AppImage dependency deployment."
+  exit 1
+fi
+
+quick-sharun --make-appimage
+
+if [[ ! -s ./dist/chatgpt-desktop.AppImage ]]; then
+  echo "Error: chatgpt-desktop.AppImage was not created."
+  exit 1
+fi
+
+APPIMAGE_SHA256="$(sha256sum ./dist/chatgpt-desktop.AppImage | awk '{print $1}')"
+printf '%s\n' "$PACKAGE_VERSION" > ./dist/version.txt
+printf '%s  %s\n' "$DEB_SHA256" 'chatgpt_amd64.deb' > ./dist/official-deb.sha256
+printf '%s  %s\n' "$ASAR_SHA256_AFTER" 'resources/app.asar' > ./dist/official-app-asar.sha256
+printf '%s  %s\n' "$APPIMAGE_SHA256" 'chatgpt-desktop.AppImage' > ./dist/SHA256SUMS.txt
+
+rm -rf "$DEB_ROOT"
+rm -f "$DEB_FILE"
+
+echo "Built: $SCRIPT_DIR/dist/chatgpt-desktop.AppImage"

@@ -90,15 +90,50 @@ jobs:
     name: Build and publish official-DEB AppImage
     needs: check
     if: needs.check.outputs.should_build == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    container: ghcr.io/pkgforge-dev/archlinux:latest
     permissions:
       contents: write
+      packages: read
     env:
       OFFICIAL_DEB_FINGERPRINT: ${{ needs.check.outputs.fingerprint }}
     steps:
+      - name: Pre-install Git
+        run: pacman -Sy --noconfirm git
+
       - name: Checkout packaging repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Preparing AnyLinux Container
+        uses: pkgforge-dev/anylinux-setup-action@8872fabe63f9a00b35e25b2f46da62a05afc9a7d
+
+      - name: Setup Yay for Root execution
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          useradd -m -G wheel builduser || true
+          echo 'builduser ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
+          for attempt in 1 2 3; do
+            rm -rf /tmp/yay-bin
+            if su - builduser -c "git -c http.version=HTTP/1.1 clone --depth=1 https://aur.archlinux.org/yay-bin.git /tmp/yay-bin"; then
+              break
+            fi
+            if [[ "$attempt" -eq 3 ]]; then
+              echo '无法克隆 yay-bin。' >&2
+              exit 1
+            fi
+            sleep 5
+          done
+          test -f /tmp/yay-bin/PKGBUILD
+          su - builduser -c "cd /tmp/yay-bin && makepkg -si --noconfirm"
+          printf '%s\n' '#!/bin/bash' 'sudo -HE -u builduser /usr/bin/yay "$@"' > /usr/local/bin/yay
+          chmod +x /usr/local/bin/yay
+
+      - name: Install GitHub CLI
+        run: pacman -S --noconfirm --needed github-cli
 
       - name: Build ChatGPT Desktop AppImage from official DEB
         working-directory: chatgpt-desktop
@@ -139,9 +174,9 @@ jobs:
 
           Packaging boundary:
           - The application source is the official OpenAI Linux DEB.
-          - \`resources/app.asar\` is verified unchanged after dependency deployment.
+          - The DEB's own desktop entry and PNG icon are reused.
+          - \`resources/app.asar\` is verified unchanged after quick-sharun dependency deployment.
           - No account data, credentials, proxy settings, personal paths, or custom \`CODEX_HOME\` are embedded.
-          - Only the portable AppImage wrapper and runtime dependency bundle are added.
 
           <!-- official-deb-fingerprint: $OFFICIAL_DEB_FINGERPRINT -->
           EOF_NOTES
