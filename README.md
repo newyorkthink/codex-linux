@@ -59,7 +59,7 @@ ChatGPT Desktop AppImage -> ~/.codex-chatgpt-desktop
 
 ### 自动构建与上游更新保护
 
-两个 GitHub Actions 工作流都只发布到固定的 [`latest`](https://github.com/newyorkthink/codex-linux/releases/tag/latest) Release，并共用同一个 concurrency，避免同时修改 Release。`ilysenko/codex-desktop-linux` 上游每 30 分钟检查一次；OpenAI 官方 DEB 每 6 小时检查一次指纹。相同上游版本不会重复自动构建，`workflow_dispatch` 可手动强制重建；工作流不使用 `actions/upload-artifact`。
+两个 GitHub Actions 工作流都只发布到固定的 [`latest`](https://github.com/newyorkthink/codex-linux/releases/tag/latest) Release。两个 workflow 使用不同的 concurrency group，因此 Codex 与官方 DEB 构建可以并行执行；进入最终发布步骤前，较新的 run 只等待更早且仍未完成的这两个构建工作流，避免同时改写 `latest` Release。`ilysenko/codex-desktop-linux` 上游每 30 分钟检查一次；OpenAI 官方 DEB 每 6 小时检查一次指纹。相同上游版本不会重复自动构建，`workflow_dispatch` 可手动强制重建；工作流不使用 `actions/upload-artifact`。
 
 Codex Desktop 构建严格按以下顺序执行：
 
@@ -141,7 +141,7 @@ On 2026-08-15 the Fixed AppImage passed a real Kali Linux + i3wm tray check: the
 
 ### Automation and upstream-drift protection
 
-Both GitHub Actions workflows publish only to the rolling [`latest`](https://github.com/newyorkthink/codex-linux/releases/tag/latest) Release and share one concurrency group so they cannot modify the Release at the same time. The `ilysenko/codex-desktop-linux` upstream is checked every 30 minutes; the official OpenAI DEB fingerprint is checked every six hours. Unchanged upstream versions are not rebuilt automatically, while `workflow_dispatch` can force a rebuild. No `actions/upload-artifact` storage is used.
+Both GitHub Actions workflows publish only to the rolling [`latest`](https://github.com/newyorkthink/codex-linux/releases/tag/latest) Release. They use separate concurrency groups so the Codex and official-DEB builds can run in parallel. Before mutating the Release, a newer run waits only for an older still-active run from these two build workflows, preventing simultaneous writes to `latest`. The `ilysenko/codex-desktop-linux` upstream is checked every 30 minutes; the official OpenAI DEB fingerprint is checked every six hours. Unchanged upstream versions are not rebuilt automatically, while `workflow_dispatch` can force a rebuild. No `actions/upload-artifact` storage is used.
 
 The Codex Desktop build first applies only the AppImage launcher isolation to the upstream AppRun template, then builds the Stock AppImage with an empty feature configuration and validates that no repository source patch was applied. The workflow verifies the generated Stock AppImage staging still contains the isolated `CODEX_HOME`. It enables the Fixed variant only while the official tray bundle still matches the verified tray contract and Electron remains on the supported major version. Inside that Fixed build, the titlebar component evaluates its own helper contract independently: an upstream theme-aware implementation is left byte-identical, while an unknown or duplicate helper shape is skipped with a warning and does not by itself block the validated tray build. If upstream changes or fixes the tray, the old tray workaround is skipped while Stock still publishes. When the known tray contract still matches, tray patch, ABI, runtime, and package validation remains fail-closed.
 

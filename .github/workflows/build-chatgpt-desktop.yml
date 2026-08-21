@@ -21,7 +21,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: codex-linux-latest
+  group: chatgpt-desktop-build
   cancel-in-progress: false
 
 env:
@@ -157,6 +157,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+
+          # 两个构建工作流可以并行；这里只等待更早且仍未结束的发布工作流，避免同时改写 latest Release。
+          while :; do
+            BLOCKING_RUN_ID="$(
+              gh api "repos/$GITHUB_REPOSITORY/actions/runs?per_page=100" \
+                --jq ".workflow_runs[] | select(.status != \"completed\" and (.name == \"Build Codex Desktop Linux\" or .name == \"Build Official ChatGPT Desktop AppImage\") and (.id < $GITHUB_RUN_ID)) | .id" \
+                | sort -n \
+                | head -n 1
+            )"
+            if [[ -z "$BLOCKING_RUN_ID" ]]; then
+              break
+            fi
+            echo "Waiting for older release-producing workflow run $BLOCKING_RUN_ID to finish."
+            sleep 15
+          done
 
           APPIMAGE_SHA256="$(awk '{print $1}' chatgpt-desktop/dist/SHA256SUMS.txt)"
           CURRENT_BODY="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json body --jq '.body' 2>/dev/null || true)"
