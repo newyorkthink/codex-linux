@@ -175,7 +175,7 @@ jobs:
           Packaging boundary:
           - The application source is the official OpenAI Linux DEB.
           - The DEB's own desktop entry and PNG icon are reused.
-          - \`resources/app.asar\` is verified unchanged after quick-sharun dependency deployment.
+          - \`official-app-asar.sha256\` records the SHA256 of the original \`resources/app.asar\` from the official DEB before quick-sharun deployment.
           - No account data, credentials, proxy settings, personal paths, or custom \`CODEX_HOME\` are embedded.
 
           <!-- official-deb-fingerprint: $OFFICIAL_DEB_FINGERPRINT -->

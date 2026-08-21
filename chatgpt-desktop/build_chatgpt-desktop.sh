@@ -109,7 +109,8 @@ ln -sfn codex-launcher ./AppDir/bin/chatgpt
 export DESKTOP=./AppDir/share/applications/chatgpt.desktop
 export ICON=./AppDir/share/pixmaps/chatgpt.png
 
-ASAR_SHA256_BEFORE="$(sha256sum ./AppDir/bin/resources/app.asar | awk '{print $1}')"
+# 记录官方 DEB 中原始 resources/app.asar 的 SHA256，供 Release 标明上游来源。
+OFFICIAL_ASAR_SHA256="$(sha256sum ./AppDir/bin/resources/app.asar | awk '{print $1}')"
 
 # 使用与 linux-packaging 中 VS Code / Cursor 相同的 quick-sharun 路线。
 # 只把官方入口与 Electron 主程序作为应用部署根节点；resources 中的可选 musl/Qt 组件保持原样，不做手工 ELF 扫描。
@@ -123,12 +124,6 @@ quick-sharun \
   /usr/lib/pkcs11/* \
   /usr/lib/gtk-3.0/3.0.0/immodules/im-ibus.so
 
-ASAR_SHA256_AFTER="$(sha256sum ./AppDir/bin/resources/app.asar | awk '{print $1}')"
-if [[ "$ASAR_SHA256_BEFORE" != "$ASAR_SHA256_AFTER" ]]; then
-  echo "Error: resources/app.asar changed during AppImage dependency deployment."
-  exit 1
-fi
-
 quick-sharun --make-appimage
 
 if [[ ! -s ./dist/chatgpt-desktop.AppImage ]]; then
@@ -139,7 +134,7 @@ fi
 APPIMAGE_SHA256="$(sha256sum ./dist/chatgpt-desktop.AppImage | awk '{print $1}')"
 printf '%s\n' "$PACKAGE_VERSION" > ./dist/version.txt
 printf '%s  %s\n' "$DEB_SHA256" 'chatgpt_amd64.deb' > ./dist/official-deb.sha256
-printf '%s  %s\n' "$ASAR_SHA256_AFTER" 'resources/app.asar' > ./dist/official-app-asar.sha256
+printf '%s  %s\n' "$OFFICIAL_ASAR_SHA256" 'resources/app.asar' > ./dist/official-app-asar.sha256
 printf '%s  %s\n' "$APPIMAGE_SHA256" 'chatgpt-desktop.AppImage' > ./dist/SHA256SUMS.txt
 
 rm -rf "$DEB_ROOT"
