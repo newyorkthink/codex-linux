@@ -1,0 +1,170 @@
+name: Build Official ChatGPT Desktop AppImage
+
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Rebuild even if the official DEB fingerprint is unchanged
+        required: false
+        type: boolean
+        default: true
+  push:
+    branches:
+      - main
+    paths:
+      - chatgpt-desktop/**
+      - .github/workflows/build-chatgpt-desktop.yml
+  schedule:
+    - cron: "17 */6 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: chatgpt-desktop-latest
+  cancel-in-progress: false
+
+env:
+  OFFICIAL_DEB_URL: https://persistent.oaistatic.com/codex-app-prod/linux/deb/latest/chatgpt_amd64.deb
+  RELEASE_TAG: chatgpt-desktop-latest
+
+jobs:
+  check:
+    name: Check official DEB
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.check.outputs.should_build }}
+      fingerprint: ${{ steps.check.outputs.fingerprint }}
+    steps:
+      - name: Compare official DEB with published release
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.force == true) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          HEADERS_FILE="$RUNNER_TEMP/chatgpt-official-deb.headers"
+          if ! curl --fail --silent --show-error --location --head \
+            --retry 5 --retry-all-errors --proto '=https' \
+            --dump-header "$HEADERS_FILE" --output /dev/null \
+            "$OFFICIAL_DEB_URL"; then
+            curl --fail --silent --show-error --location --range 0-0 \
+              --retry 5 --retry-all-errors --proto '=https' \
+              --dump-header "$HEADERS_FILE" --output /dev/null \
+              "$OFFICIAL_DEB_URL"
+          fi
+
+          ETAG="$(awk 'BEGIN{IGNORECASE=1} /^etag:/ {sub(/^[^:]+:[[:space:]]*/, ""); gsub(/\r/, ""); value=$0} END{print value}' "$HEADERS_FILE")"
+          LAST_MODIFIED="$(awk 'BEGIN{IGNORECASE=1} /^last-modified:/ {sub(/^[^:]+:[[:space:]]*/, ""); gsub(/\r/, ""); value=$0} END{print value}' "$HEADERS_FILE")"
+          CONTENT_LENGTH="$(awk 'BEGIN{IGNORECASE=1} /^content-length:/ {sub(/^[^:]+:[[:space:]]*/, ""); gsub(/\r/, ""); value=$0} END{print value}' "$HEADERS_FILE")"
+          CONTENT_RANGE="$(awk 'BEGIN{IGNORECASE=1} /^content-range:/ {sub(/^[^:]+:[[:space:]]*/, ""); gsub(/\r/, ""); value=$0} END{print value}' "$HEADERS_FILE")"
+
+          if [[ -n "$ETAG" || -n "$LAST_MODIFIED" || -n "$CONTENT_LENGTH" || -n "$CONTENT_RANGE" ]]; then
+            FINGERPRINT="$(printf '%s\n%s\n%s\n%s\n' "$ETAG" "$LAST_MODIFIED" "$CONTENT_LENGTH" "$CONTENT_RANGE" | sha256sum | awk '{print $1}')"
+          else
+            FINGERPRINT=""
+          fi
+
+          PUBLISHED_BODY="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json body --jq '.body' 2>/dev/null || true)"
+          PUBLISHED_ASSETS="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/dev/null || true)"
+
+          ASSETS_OK=false
+          if grep -Fxq 'chatgpt-desktop.AppImage' <<<"$PUBLISHED_ASSETS" && \
+             grep -Fxq 'SHA256SUMS.txt' <<<"$PUBLISHED_ASSETS"; then
+            ASSETS_OK=true
+          fi
+
+          if [[ "$FORCE" == "true" || -z "$FINGERPRINT" || "$ASSETS_OK" != "true" ]] || \
+             ! grep -Fq "<!-- official-deb-fingerprint: $FINGERPRINT -->" <<<"$PUBLISHED_BODY"; then
+            SHOULD_BUILD=true
+          else
+            SHOULD_BUILD=false
+          fi
+
+          echo "fingerprint=$FINGERPRINT" >> "$GITHUB_OUTPUT"
+          echo "should_build=$SHOULD_BUILD" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build and publish official-DEB AppImage
+    needs: check
+    if: needs.check.outputs.should_build == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    env:
+      OFFICIAL_DEB_FINGERPRINT: ${{ needs.check.outputs.fingerprint }}
+    steps:
+      - name: Checkout packaging repository
+        uses: actions/checkout@v4
+
+      - name: Build ChatGPT Desktop AppImage from official DEB
+        working-directory: chatgpt-desktop
+        shell: bash
+        env:
+          CHATGPT_DEB_URL: ${{ env.OFFICIAL_DEB_URL }}
+        run: |
+          set -euo pipefail
+          chmod +x build_chatgpt-desktop.sh
+          ./build_chatgpt-desktop.sh
+
+          test -s dist/chatgpt-desktop.AppImage
+          test -s dist/version.txt
+          test -s dist/official-deb.sha256
+          test -s dist/official-app-asar.sha256
+          test -s dist/SHA256SUMS.txt
+
+      - name: Publish isolated rolling release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          VERSION="$(cat chatgpt-desktop/dist/version.txt)"
+          DEB_SHA256="$(awk '{print $1}' chatgpt-desktop/dist/official-deb.sha256)"
+          ASAR_SHA256="$(awk '{print $1}' chatgpt-desktop/dist/official-app-asar.sha256)"
+          APPIMAGE_SHA256="$(awk '{print $1}' chatgpt-desktop/dist/SHA256SUMS.txt)"
+
+          cat > "$RUNNER_TEMP/chatgpt-desktop-release-notes.md" <<EOF_NOTES
+          Built directly from OpenAI's official Linux amd64 DEB:
+          $OFFICIAL_DEB_URL
+
+          Package version: \`$VERSION\`
+          Official DEB SHA256: \`$DEB_SHA256\`
+          Official \`resources/app.asar\` SHA256: \`$ASAR_SHA256\`
+          AppImage SHA256: \`$APPIMAGE_SHA256\`
+
+          Packaging boundary:
+          - The application source is the official OpenAI Linux DEB.
+          - \`resources/app.asar\` is verified unchanged after dependency deployment.
+          - No account data, credentials, proxy settings, personal paths, or custom \`CODEX_HOME\` are embedded.
+          - Only the portable AppImage wrapper and runtime dependency bundle are added.
+
+          <!-- official-deb-fingerprint: $OFFICIAL_DEB_FINGERPRINT -->
+          EOF_NOTES
+
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh api --method PATCH \
+              "repos/$GITHUB_REPOSITORY/git/refs/tags/$RELEASE_TAG" \
+              -f sha="$GITHUB_SHA" -F force=true >/dev/null
+            gh release edit "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "ChatGPT Desktop AppImage (Official DEB Repack)" \
+              --notes-file "$RUNNER_TEMP/chatgpt-desktop-release-notes.md"
+          else
+            gh release create "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "ChatGPT Desktop AppImage (Official DEB Repack)" \
+              --notes-file "$RUNNER_TEMP/chatgpt-desktop-release-notes.md" \
+              --latest=false
+          fi
+
+          gh release upload "$RELEASE_TAG" \
+            chatgpt-desktop/dist/chatgpt-desktop.AppImage \
+            chatgpt-desktop/dist/SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
